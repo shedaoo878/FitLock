@@ -1,5 +1,14 @@
-// ── Supabase Client ──
-importScripts("supabase.js");
+// ── Supabase Client (Official SDK) ──
+import {
+  sbGoogleSignIn,
+  sbSignOut,
+  sbSelect,
+  sbInsert,
+  sbUpdate,
+  sbDelete,
+  sbUpsert,
+  sbInvoke,
+} from "./supabase.js";
 
 // ── Constants ──
 const METERS_PER_MILE = 1609.34;
@@ -437,9 +446,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         if (updatedCache.result.goalMet) {
           await chrome.storage.local.set({ unlockedToday: true });
         } else {
-          // You might not want to instantly lock them, but logically if objective increased, maybe reconsider.
-          // Let's rely on standard logic - if they set it higher, it doesn't auto-lock until reset, unless you want it to.
-          // Assuming we only unlock if met.
           await chrome.storage.local.set({ unlockedToday: false });
         }
         await applyBlockingRules();

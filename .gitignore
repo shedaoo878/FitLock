@@ -22,6 +22,7 @@ supabase/.temp/
 supabase/functions/**/.env
 
 # Chrome Extension build artifacts
+chrome-extension/dist/
 *.zip
 *.crx
 *.pem

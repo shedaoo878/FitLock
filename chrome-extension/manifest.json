@@ -13,7 +13,8 @@
     "<all_urls>"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "dist/background.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "popup.html",
@@ -37,7 +38,6 @@
         "blocked.html",
         "blocked.css",
         "blocked.js",
-        "supabase.js",
         "onboarding.html",
         "onboarding.css",
         "onboarding.js"
