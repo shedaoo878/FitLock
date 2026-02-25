@@ -1,0 +1,121 @@
+/* ══════════════════════════════════════════════════════════════
+   FitLock — YouTube Smart Lock Styles
+   ══════════════════════════════════════════════════════════════ */
+
+/* ── Hide video content until verdict ─────────────────────────
+   We only hide the video element and the bottom control bar.
+   If we hide #movie_player, our overlays inside it become invisible.
+   The video stays hidden until body gets "fitlock-productive". */
+
+video.html5-main-video,
+.ytp-chrome-bottom {
+    visibility: hidden !important;
+    opacity: 0 !important;
+}
+
+body.fitlock-productive video.html5-main-video,
+body.fitlock-productive .ytp-chrome-bottom,
+#movie_player.ad-showing video.html5-main-video,
+#movie_player.ad-showing .ytp-chrome-bottom,
+#movie_player.ad-interrupting video.html5-main-video,
+#movie_player.ad-interrupting .ytp-chrome-bottom {
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* ── Player container — relative anchor for overlays ────────── */
+#player-container-outer,
+#player-container-inner,
+ytd-player#ytd-player {
+    position: relative !important;
+}
+
+/* ── Shared overlay base (scanning + blocked) ─────────────── */
+#fitlock-overlay,
+#fitlock-blocked-overlay {
+    position: absolute !important;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    font-family: "SF Mono", "Fira Code", monospace;
+    pointer-events: auto;
+}
+
+/* ── Scanning overlay ─────────────────────────────────────── */
+#fitlock-overlay {
+    background: #0a0e14;
+    color: #e8eaed;
+    transition: opacity 0.4s;
+}
+
+#fitlock-overlay h1 {
+    font-size: 20px;
+    letter-spacing: 2px;
+    margin: 0 0 6px;
+    color: #58a6ff;
+}
+
+#fitlock-overlay p {
+    font-size: 13px;
+    color: #8b9ab5;
+    margin: 0;
+}
+
+.fitlock-spinner {
+    width: 36px;
+    height: 36px;
+    border: 3px solid rgba(88, 166, 255, 0.2);
+    border-radius: 50%;
+    border-top-color: #58a6ff;
+    animation: fitlock-spin 1s ease-in-out infinite;
+    margin-bottom: 16px;
+}
+
+@keyframes fitlock-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* ── Blocked overlay ──────────────────────────────────────── */
+#fitlock-blocked-overlay {
+    background: #0d1117;
+    color: #e8eaed;
+}
+
+.fitlock-blocked-icon {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    background: rgba(248, 113, 113, 0.12);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+}
+
+.fitlock-blocked-icon svg {
+    color: #f87171;
+}
+
+#fitlock-blocked-overlay h1 {
+    font-size: 20px;
+    letter-spacing: 2px;
+    margin: 0 0 8px;
+    color: #f87171;
+}
+
+#fitlock-blocked-overlay p {
+    font-size: 13px;
+    color: #8b9ab5;
+    margin: 0;
+    text-align: center;
+    max-width: 340px;
+    line-height: 1.5;
+}
