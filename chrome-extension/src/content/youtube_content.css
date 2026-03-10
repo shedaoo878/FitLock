@@ -30,9 +30,10 @@ ytd-player#ytd-player {
     position: relative !important;
 }
 
-/* ── Shared overlay base (scanning + blocked) ─────────────── */
+/* ── Shared overlay base (scanning + blocked + ollama setup) ── */
 #fitlock-overlay,
-#fitlock-blocked-overlay {
+#fitlock-blocked-overlay,
+#fitlock-ollama-setup-overlay {
     position: absolute !important;
     top: 0;
     left: 0;
@@ -117,5 +118,35 @@ ytd-player#ytd-player {
     margin: 0;
     text-align: center;
     max-width: 340px;
+    line-height: 1.5;
+}
+
+/* ── Ollama setup overlay ────────────────────────────────── */
+#fitlock-ollama-setup-overlay {
+    background: #0d1117;
+    color: #e8eaed;
+}
+
+#fitlock-ollama-setup-overlay .fitlock-blocked-icon {
+    background: rgba(251, 191, 36, 0.12);
+}
+
+#fitlock-ollama-setup-overlay .fitlock-blocked-icon svg {
+    color: #fbbf24;
+}
+
+#fitlock-ollama-setup-overlay h1 {
+    font-size: 20px;
+    letter-spacing: 2px;
+    margin: 0 0 8px;
+    color: #fbbf24;
+}
+
+#fitlock-ollama-setup-overlay p {
+    font-size: 13px;
+    color: #8b9ab5;
+    margin: 0;
+    text-align: center;
+    max-width: 380px;
     line-height: 1.5;
 }

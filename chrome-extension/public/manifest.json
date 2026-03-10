@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "FitLock",
   "version": "1.0.0",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA8cKTFpxLCTJuEf10NeXEgYJxnRrQcckYdWksU2ClK3oHczzqf3b7yp7+M9tloUVs6pCFrgSU9WCRTNujTGhCSamj4594kK6rQxK1LyHSbiFsgt/UD5Hre0TlkwPLkVUS1eXBDyegNObhsbpBMRJE50t3GBq0MK8EmJzPfs8Gx4nBIELQCxu5Q1o+Sh1YeEX6Js4920wCJBp2nvTuhVR18isKYSkX46ZK4KEG1+2LEMc+XlMHLe991yEb2R8Bbec3AGPK2/0MWdpXS1m4y+qJwXb6DezcJnVARsjKkU+TgCAWum17Nwt/IF0zq9ypwC5Jp6+t8gtmvwlj8zyFj7fRhwIDAQAB",
   "description": "Block distracting websites until you complete your daily running goal on Strava.",
   "permissions": [
     "storage",
@@ -10,7 +11,8 @@
     "identity"
   ],
   "host_permissions": [
-    "<all_urls>"
+    "<all_urls>",
+    "http://localhost:11434/*"
   ],
   "background": {
     "service_worker": "background.js",

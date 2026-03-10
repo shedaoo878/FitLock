@@ -11,6 +11,15 @@ let currentVideoId = null;
 let overlayActive = false;
 let analysisGeneration = 0;  // incremented on every new analysis to cancel stale ones
 let pauseEnforcerInterval = null; // interval ID to prevent YouTube from autoplaying
+let aiBackend = "gemini"; // "gemini" or "ollama" — set during init based on AI availability
+let ollamaConfigured = false; // whether an Ollama model has been selected
+let pauseLogCount = 0; // counter to collapse repeated "Video paused" console logs
+
+// ── Session-scoped verdict cache ────────────────────────────
+// Keeps track of AI verdicts for the current browsing session so that
+// re-visiting the same video doesn't require another AI call and
+// previously-blocked videos stay blocked.
+const verdictCache = new Map(); // videoId → { isProductive: boolean }
 
 console.log("[FitLock] Content script loaded on:", window.location.href);
 
@@ -42,7 +51,10 @@ function pauseVideo() {
     const video = document.querySelector("video");
     if (video) {
         video.pause();
-        console.log("[FitLock] Video paused for analysis.");
+        pauseLogCount++;
+        if (pauseLogCount === 1) {
+            console.log("[FitLock] Video paused for analysis.");
+        }
     }
 }
 
@@ -69,6 +81,7 @@ function stopPauseEnforcer() {
     if (pauseEnforcerInterval !== null) {
         clearInterval(pauseEnforcerInterval);
         pauseEnforcerInterval = null;
+        pauseLogCount = 0;
     }
 }
 
@@ -133,6 +146,35 @@ function hideOverlayAndAllow() {
     playVideo();
 }
 
+function cleanupOverlaysOnly() {
+    overlayActive = false;
+
+    // Do NOT add fitlock-productive here — on non-watch pages the CSS rules
+    // hide the video element by default.  Adding the class would briefly flash
+    // the cached video frame, causing a visible flicker.
+
+    const overlay = document.getElementById("fitlock-overlay");
+    if (overlay) overlay.remove();
+
+    const blocked = document.getElementById("fitlock-blocked-overlay");
+    if (blocked) blocked.remove();
+
+    // Stop enforcing pause but do NOT resume playback
+    stopPauseEnforcer();
+
+    // Actively pause and mute to prevent audio leak from the SPA-cached video
+    const video = document.querySelector("video");
+    if (video) {
+        video.pause();
+        video.muted = true;
+    }
+    window.postMessage({ type: "FITLOCK_PAUSE_VIDEO" }, "*");
+
+    // Reset currentVideoId so that clicking the same video again triggers
+    // a fresh analysis (which will hit the verdict cache for instant blocking).
+    currentVideoId = null;
+}
+
 function blockVideo() {
     overlayActive = false;
 
@@ -173,6 +215,48 @@ function blockVideo() {
         document.body.appendChild(blocked);
     }
     blocked.style.display = "flex";
+}
+
+function showOllamaSetupOverlay() {
+    if (overlayActive) return;
+    overlayActive = true;
+    document.body.classList.remove("fitlock-productive");
+
+    pauseVideo();
+    startPauseEnforcer();
+
+    // Remove any lingering overlays
+    const existing = document.getElementById("fitlock-overlay");
+    if (existing) existing.remove();
+    const blocked = document.getElementById("fitlock-blocked-overlay");
+    if (blocked) blocked.remove();
+
+    let overlay = document.getElementById("fitlock-ollama-setup-overlay");
+    if (!overlay) {
+        overlay = document.createElement("div");
+        overlay.id = "fitlock-ollama-setup-overlay";
+        overlay.innerHTML = `
+      <div class="fitlock-blocked-icon">
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+          stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 8v4" />
+          <circle cx="12" cy="16" r="0.5" fill="currentColor" />
+        </svg>
+      </div>
+      <h1>OLLAMA REQUIRED</h1>
+      <p>Set up Ollama in FitLock extension settings to enable Smart Lock.<br>
+         Install Ollama, start it, then select a model in the Config tab.</p>
+    `;
+    }
+
+    const container = getPlayerContainer();
+    if (container) {
+        container.appendChild(overlay);
+    } else {
+        document.body.appendChild(overlay);
+    }
+    overlay.style.display = "flex";
 }
 
 // ── Metadata Extraction ──────────────────────────────────────
@@ -218,27 +302,27 @@ function scrapeMetadata(logEntry, targetVideoId) {
 
     let description = "";
 
-    // YouTube's DOM for the description text (`ytd-text-inline-expander`) often
-    // retains the text of the PREVIOUS video during SPA navigations.
-    // The `<meta name="description">` tag updates much more reliably.
-    const descMeta = document.querySelector("meta[name='description']");
-    if (descMeta) {
-        const raw = descMeta.content || "";
-        // Filter out YouTube's generic page-level description if it hasn't updated yet
-        if (!raw.startsWith("Enjoy the videos and music you love")) {
-            description = raw;
-        }
+    // Try the structured description element first — it's scoped to the
+    // current video component and updates more reliably during SPA navigations
+    // than the <meta name="description"> tag (which often retains the PREVIOUS
+    // video's description during YouTube's client-side routing).
+    const expanderEl = document.querySelector(
+        "ytd-text-inline-expander #content, " +
+        "ytd-text-inline-expander .content, " +
+        "#description-inline-expander #plain-snippet-text"
+    );
+    if (expanderEl) {
+        description = expanderEl.textContent.trim().substring(0, 500);
     }
 
-    // Fallback if meta tag is truly empty (rare)
+    // Fallback to meta tag only if the DOM element was empty
     if (!description) {
-        const expanderEl = document.querySelector(
-            "ytd-text-inline-expander #content, " +
-            "ytd-text-inline-expander .content, " +
-            "#description-inline-expander #plain-snippet-text"
-        );
-        if (expanderEl) {
-            description = expanderEl.textContent.trim().substring(0, 500);
+        const descMeta = document.querySelector("meta[name='description']");
+        if (descMeta) {
+            const raw = descMeta.content || "";
+            if (!raw.startsWith("Enjoy the videos and music you love")) {
+                description = raw;
+            }
         }
     }
 
@@ -326,6 +410,67 @@ function runInference(title, description, logEntry) {
     });
 }
 
+// ── AI Inference (Via Ollama / Background Script) ──────────────
+
+function runOllamaInference(title, description, logEntry) {
+    return new Promise((resolve) => {
+        const inferenceStart = performance.now();
+
+        chrome.runtime.sendMessage(
+            { action: "ollamaInference", title, description },
+            (res) => {
+                logEntry.ai.inferenceDurationMs = Math.round(performance.now() - inferenceStart);
+
+                if (chrome.runtime.lastError || !res || !res.success) {
+                    logEntry.ai.available = false;
+                    logEntry.ai.error = res?.error || chrome.runtime.lastError?.message || "Ollama inference failed";
+                    resolve(null);
+                    return;
+                }
+
+                logEntry.ai.available = true;
+                logEntry.ai.rawResponse = res.rawResponse;
+
+                console.log("[FitLock] Ollama raw response:", res.rawResponse);
+
+                // Strip markdown code fences if present (e.g. ```json ... ```)
+                let result = res.rawResponse;
+                result = result.replace(/```(?:json)?\s*/gi, "").replace(/```/g, "").trim();
+
+                const jsonMatch = result.match(/\{[\s\S]*?\}/);
+                if (jsonMatch) {
+                    try {
+                        const parsed = JSON.parse(jsonMatch[0]);
+                        logEntry.ai.parsedResponse = parsed;
+                        logEntry.ai.parseMethod = "json_match";
+                        console.log("[FitLock] Ollama parsed:", parsed);
+                        resolve(parsed.isProductive === true);
+                        return;
+                    } catch (parseErr) {
+                        logEntry.ai.error = "JSON.parse failed on matched block: " + parseErr.message;
+                    }
+                }
+
+                const fallback = result.toLowerCase().includes('"isproductive": true') ||
+                    result.toLowerCase().includes('"isproductive":true');
+                logEntry.ai.parsedResponse = { fallbackMatch: fallback };
+                logEntry.ai.parseMethod = "includes_fallback";
+                console.log("[FitLock] Ollama fallback parse, isProductive:", fallback);
+                resolve(fallback);
+            }
+        );
+
+        // Timeout safeguard (60s for Ollama since local models can be slower)
+        setTimeout(() => {
+            if (logEntry.ai.inferenceDurationMs === null) {
+                logEntry.ai.error = "Ollama inference timed out after 60 seconds.";
+                logEntry.ai.inferenceDurationMs = Math.round(performance.now() - inferenceStart);
+                resolve(null);
+            }
+        }, 60000);
+    });
+}
+
 // ── Main Analysis Pipeline ───────────────────────────────────
 
 async function analyzeCurrentVideo(trigger) {
@@ -339,12 +484,32 @@ async function analyzeCurrentVideo(trigger) {
         logEntry.verdict.isProductive = null;
         logEntry.verdict.action = "skip_non_watch";
         await finalizeLog(logEntry);
-        hideOverlayAndAllow();
+        cleanupOverlaysOnly();
         return;
     }
 
     // Identify the target video ID we're supposed to analyze
     const targetVideoId = new URLSearchParams(window.location.search).get("v");
+
+    // ── Check session verdict cache ──────────────────────────
+    if (targetVideoId && verdictCache.has(targetVideoId)) {
+        const cached = verdictCache.get(targetVideoId);
+        console.log(`[FitLock] Cache hit for ${targetVideoId}: isProductive=${cached.isProductive}`);
+
+        logEntry.verdict.isProductive = cached.isProductive;
+        logEntry.verdict.action = cached.isProductive ? "allow_cached" : "block_cached";
+
+        if (cached.isProductive) {
+            hideOverlayAndAllow();
+        } else {
+            // Show scanning briefly then immediately block
+            showScanningOverlay();
+            blockVideo();
+        }
+
+        await finalizeLog(logEntry);
+        return;
+    }
 
     let retries = 0;
     const maxRetries = 20; // Increased retries since we might be waiting for SPA DOM update
@@ -395,7 +560,9 @@ async function analyzeCurrentVideo(trigger) {
         return;
     }
 
-    const isProductive = await runInference(metadata.title, metadata.description, logEntry);
+    const isProductive = aiBackend === "gemini"
+        ? await runInference(metadata.title, metadata.description, logEntry)
+        : await runOllamaInference(metadata.title, metadata.description, logEntry);
 
     // Stale check after AI inference
     if (thisGeneration !== analysisGeneration) {
@@ -412,6 +579,12 @@ async function analyzeCurrentVideo(trigger) {
     } else {
         logEntry.verdict.isProductive = isProductive;
         logEntry.verdict.action = isProductive ? "allow" : "block";
+
+        // Cache the verdict for this session so re-visits are instant
+        if (targetVideoId) {
+            verdictCache.set(targetVideoId, { isProductive });
+            console.log(`[FitLock] Cached verdict for ${targetVideoId}: isProductive=${isProductive}`);
+        }
 
         if (isProductive) {
             hideOverlayAndAllow();
@@ -432,6 +605,12 @@ function initSmartLock() {
             return;
         }
 
+        // Set AI backend for the session
+        aiBackend = res.aiBackend || "gemini";
+        ollamaConfigured = !!res.ollamaModel;
+
+        console.log(`[FitLock] AI backend: ${aiBackend}, Ollama configured: ${ollamaConfigured}`);
+
         const isActive = !res.unlockedToday &&
             res.blockedSites.includes("youtube.com") &&
             res.youtubeSmartLock;
@@ -439,6 +618,21 @@ function initSmartLock() {
         if (!isActive) {
             console.log("[FitLock] Smart Lock is NOT active. No analysis will run.");
             document.body.classList.add("fitlock-productive");
+            return;
+        }
+
+        // When using Ollama backend, require a model to be configured
+        if (aiBackend === "ollama" && !ollamaConfigured) {
+            console.log("[FitLock] Non-Chrome browser detected but Ollama not configured. Showing setup overlay.");
+            if (window.location.pathname.startsWith("/watch")) {
+                showOllamaSetupOverlay();
+            }
+            // Still listen for navigations to show the overlay on new videos
+            window.addEventListener("yt-navigate-finish", () => {
+                if (window.location.pathname.startsWith("/watch")) {
+                    showOllamaSetupOverlay();
+                }
+            });
             return;
         }
 

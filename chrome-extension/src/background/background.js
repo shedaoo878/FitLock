@@ -14,16 +14,102 @@ import {
 const METERS_PER_MILE = 1609.34;
 const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const RESET_ALARM = "fitlock-daily-reset";
+const OLLAMA_BASE_URL = "http://localhost:11434";
+
+// ── AI Backend Detection ──
+// Instead of browser sniffing (unreliable — Arc, Brave, etc. report "Google Chrome"),
+// we detect whether the built-in Gemini Nano API is actually available.
+async function detectAIBackend() {
+  try {
+    if (typeof self.ai !== "undefined" && self.ai?.languageModel) {
+      const caps = await self.ai.languageModel.capabilities();
+      if (caps && caps.available === "readily") return "gemini";
+    }
+  } catch { }
+  return "ollama";
+}
+
+// ── Ollama Integration ──
+const OLLAMA_SYSTEM_PROMPT = `You are a strict productivity analyzer. Determine if a video is "Productive" or a "Distraction" based PRIMARILY on its title. The description may be stale or missing — if the title clearly indicates the topic, trust the title over the description.
+
+Classify as Productive if it relates to: Mathematics, Computer Science, Artificial Intelligence, machine learning, robotics, the space industry, Swift iOS app development, combinatorics, evolution, or fitness and gym training.
+
+Classify as Distraction if it does NOT clearly relate to any of the above productive categories.
+
+Respond only in raw JSON format: {"isProductive": boolean, "category": "string", "reasoning": "short explanation"}`;
+
+async function checkOllamaStatus() {
+  try {
+    const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`);
+    if (res.status === 403) {
+      return { available: false, models: [], error: "cors" };
+    }
+    if (!res.ok) return { available: false, models: [] };
+    const data = await res.json();
+    const models = (data.models || []).map(m => m.name);
+    return { available: true, models };
+  } catch {
+    return { available: false, models: [] };
+  }
+}
+
+async function ollamaInference(title, description) {
+  const data = await chrome.storage.local.get(["ollamaModel"]);
+  const model = data.ollamaModel;
+  if (!model) throw new Error("No Ollama model selected. Configure one in FitLock settings.");
+
+  const userPrompt = `Title: ${title}\nDescription: ${description}`;
+
+  // Use /api/chat with proper message roles — models respond much more
+  // reliably to structured chat messages than raw /api/generate prompts.
+  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model,
+      messages: [
+        { role: "system", content: OLLAMA_SYSTEM_PROMPT },
+        { role: "user", content: userPrompt }
+      ],
+      stream: false,
+      options: { temperature: 0 }
+    })
+  });
+
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "Unknown error");
+    throw new Error(`Ollama inference failed (${res.status}): ${errText}`);
+  }
+
+  const result = await res.json();
+  return result.message?.content || "";
+}
 
 // Your Strava API app's Client ID (public, safe to embed)
 // Find this at: https://www.strava.com/settings/api
 const STRAVA_CLIENT_ID = "203705";
 
 // ── Initialization ──
-chrome.runtime.onInstalled.addListener((details) => {
+chrome.runtime.onInstalled.addListener(async (details) => {
   // Open onboarding wizard on first install only
   if (details.reason === "install") {
-    chrome.tabs.create({ url: chrome.runtime.getURL("onboarding.html") });
+    let isChrome = false;
+    // Check userAgentData brands for Google Chrome (ignores Edge, Brave, etc. which don't have it in brands)
+    if (navigator.userAgentData && navigator.userAgentData.brands) {
+      isChrome = navigator.userAgentData.brands.some(b => b.brand === "Google Chrome");
+    } else {
+      // Fallback: check userAgent string for Chrome, but NOT Edge/Edg, OPR, Arc
+      const ua = navigator.userAgent;
+      if (ua.includes("Chrome") && !ua.includes("Edg") && !ua.includes("OPR") && !ua.includes("Arc") && !ua.includes("Dia")) {
+        isChrome = true;
+      }
+    }
+
+    if (isChrome) {
+      chrome.tabs.create({ url: chrome.runtime.getURL("onboarding.html") });
+    } else {
+      chrome.tabs.create({ url: chrome.runtime.getURL("ollama-setup.html") });
+    }
   }
 
   chrome.storage.local.get(["blockedSites", "goalMiles", "resetHour", "sbUser"], (data) => {
@@ -495,8 +581,9 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === "getStatus") {
     chrome.storage.local.get(
-      ["blockedSites", "goalMiles", "unlockedToday", "stravaConnected", "activityCache", "resetHour", "sbUser", "youtubeSmartLock"],
-      (data) => {
+      ["blockedSites", "goalMiles", "unlockedToday", "stravaConnected", "activityCache", "resetHour", "sbUser", "youtubeSmartLock", "ollamaModel"],
+      async (data) => {
+        const aiBackend = await detectAIBackend();
         sendResponse({
           blockedSites: data.blockedSites || [],
           goalMiles: data.goalMiles || 1,
@@ -506,6 +593,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           resetHour: data.resetHour ?? 0,
           googleUser: data.sbUser || null,
           youtubeSmartLock: data.youtubeSmartLock || false,
+          aiBackend,
+          ollamaModel: data.ollamaModel || null,
         });
       }
     );
@@ -527,6 +616,27 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
         sendResponse({ available: false, error: err.message });
       }
     })();
+    return true;
+  }
+
+  if (msg.action === "checkOllamaStatus") {
+    checkOllamaStatus()
+      .then((result) => sendResponse(result))
+      .catch(() => sendResponse({ available: false, models: [] }));
+    return true;
+  }
+
+  if (msg.action === "selectOllamaModel") {
+    chrome.storage.local.set({ ollamaModel: msg.model }, () => {
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+
+  if (msg.action === "ollamaInference") {
+    ollamaInference(msg.title, msg.description)
+      .then((rawResponse) => sendResponse({ success: true, rawResponse }))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
   }
 

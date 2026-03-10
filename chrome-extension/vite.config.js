@@ -14,6 +14,7 @@ export default defineConfig({
         background: resolve(__dirname, "src/background/background.js"),
         popup: resolve(__dirname, "popup.html"),
         onboarding: resolve(__dirname, "onboarding.html"),
+        "ollama-setup": resolve(__dirname, "ollama-setup.html"),
       },
       output: {
         // background.js stays flat (referenced by manifest); UI assets go in assets/

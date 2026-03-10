@@ -452,3 +452,43 @@ button:hover {
   margin: 0 !important;
   cursor: pointer;
 }
+
+/* ── Divider ── */
+.divider {
+  border: none;
+  border-top: 1px solid #1a1f2e;
+  margin: 16px 0;
+}
+
+/* ── Ollama save button ── */
+#save-ollama-btn {
+  background: rgba(88, 166, 255, 0.1);
+  color: #58a6ff;
+  border-color: rgba(88, 166, 255, 0.25);
+}
+
+#save-ollama-btn:hover {
+  background: rgba(88, 166, 255, 0.18);
+  border-color: rgba(88, 166, 255, 0.4);
+}
+
+#save-ollama-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Ollama CORS fix box ── */
+.cors-fix-box {
+  background: #151b26;
+  border: 1px solid #1e2736;
+  border-radius: 2px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  overflow-x: auto;
+}
+
+.cors-fix-box code {
+  font-size: 10px;
+  color: #fbbf24;
+  white-space: nowrap;
+}

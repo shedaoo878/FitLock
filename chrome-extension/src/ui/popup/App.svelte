@@ -12,6 +12,15 @@
   let lastCheck = $state(null);
   let siteInput = $state("");
 
+  // Ollama state (non-Chrome browsers)
+  let aiBackend = $state("gemini");
+  let ollamaAvailable = $state(false);
+  let ollamaModels = $state([]);
+  let ollamaModel = $state("");
+  let ollamaChecking = $state(false);
+  let ollamaModelSaved = $state(false);
+  let ollamaCorsError = $state(false);
+
   // Button loading states
   let googleSigningIn = $state(false);
   let googleSigningOut = $state(false);
@@ -59,9 +68,16 @@
       googleUser = res.googleUser;
       stravaConnected = res.stravaConnected;
       lastCheck = res.lastCheck;
+      aiBackend = res.aiBackend || "gemini";
+      ollamaModel = res.ollamaModel || "";
 
       if (!res.googleUser || !res.stravaConnected) {
         activeTab = "account";
+      }
+
+      // Auto-check Ollama status on non-Chrome browsers
+      if (aiBackend === "ollama") {
+        refreshOllama();
       }
     });
   }
@@ -161,6 +177,24 @@
     chrome.runtime.sendMessage({ action: "setResetHour", resetHour: hour }, () => {
       resetSaved = true;
       setTimeout(() => (resetSaved = false), 1500);
+    });
+  }
+
+  function refreshOllama() {
+    ollamaChecking = true;
+    chrome.runtime.sendMessage({ action: "checkOllamaStatus" }, (res) => {
+      ollamaChecking = false;
+      ollamaAvailable = res?.available || false;
+      ollamaModels = res?.models || [];
+      ollamaCorsError = res?.error === "cors";
+    });
+  }
+
+  function selectOllamaModel() {
+    if (!ollamaModel) return;
+    chrome.runtime.sendMessage({ action: "selectOllamaModel", model: ollamaModel }, () => {
+      ollamaModelSaved = true;
+      setTimeout(() => (ollamaModelSaved = false), 1500);
     });
   }
 
@@ -348,6 +382,55 @@
         </select>
         <button id="save-reset-btn" onclick={saveResetHour}>{resetSaved ? "Saved!" : "SET"}</button>
       </div>
+
+      {#if aiBackend === "ollama"}
+        <hr class="divider">
+        <div class="section-header">
+          <span class="section-label">OLLAMA (LOCAL AI)</span>
+        </div>
+        <p class="setting-desc">Smart Lock uses Ollama for AI inference on non-Chrome browsers.</p>
+
+        <div class="connection-status" style="justify-content: flex-start; padding: 8px 0;">
+          <span class="status-dot" class:online={ollamaAvailable}></span>
+          <span class="status-label" style={ollamaAvailable ? "" : "color: #f87171"}>
+            {ollamaChecking ? "CHECKING..." : ollamaAvailable ? "CONNECTED" : "NOT DETECTED"}
+          </span>
+        </div>
+
+        {#if ollamaAvailable && ollamaModels.length > 0}
+          <label for="ollama-model-select">Model</label>
+          <div class="input-group">
+            <select id="ollama-model-select" bind:value={ollamaModel}>
+              <option value="">Select a model...</option>
+              {#each ollamaModels as model}
+                <option value={model}>{model}</option>
+              {/each}
+            </select>
+            <button id="save-ollama-btn" onclick={selectOllamaModel} disabled={!ollamaModel}>
+              {ollamaModelSaved ? "Saved!" : "SET"}
+            </button>
+          </div>
+        {:else if ollamaAvailable}
+          <p class="setting-desc">Ollama is running but no models found. Pull a model first (e.g. ollama pull llama3.2:1b).</p>
+        {:else if ollamaCorsError}
+          <p class="setting-desc" style="color: #fbbf24;">
+            Ollama is running but blocking extension requests. Set the OLLAMA_ORIGINS environment variable and restart Ollama:
+          </p>
+          <div class="cors-fix-box">
+            <code>OLLAMA_ORIGINS=chrome-extension://* ollama serve</code>
+          </div>
+          <p class="setting-desc" style="margin-top: 6px;">
+            Or on macOS, set it globally:<br>
+            <code style="font-size: 10px;">launchctl setenv OLLAMA_ORIGINS "chrome-extension://*"</code>
+          </p>
+        {:else}
+          <p class="setting-desc">Install and start Ollama to enable Smart Lock on this browser.</p>
+        {/if}
+
+        <button class="full-btn" onclick={refreshOllama} disabled={ollamaChecking}>
+          {ollamaChecking ? "Checking..." : "REFRESH OLLAMA STATUS"}
+        </button>
+      {/if}
     </div>
   {/if}
 </div>
