@@ -7,18 +7,21 @@
    If we hide #movie_player, our overlays inside it become invisible.
    The video stays hidden until body gets "fitlock-productive". */
 
-video.html5-main-video,
-.ytp-chrome-bottom {
+/* Hide the video element until the AI verdict arrives.
+   Do NOT touch .ytp-chrome-bottom (the player controls bar) — YouTube
+   manages its own show/hide transitions via opacity.  Overriding that
+   with !important freezes the controls on-screen permanently.
+   The scanning/blocked overlay (z-index 9999) already covers the
+   entire player, so hiding the controls separately is unnecessary. */
+
+video.html5-main-video {
     visibility: hidden !important;
     opacity: 0 !important;
 }
 
 body.fitlock-productive video.html5-main-video,
-body.fitlock-productive .ytp-chrome-bottom,
 #movie_player.ad-showing video.html5-main-video,
-#movie_player.ad-showing .ytp-chrome-bottom,
-#movie_player.ad-interrupting video.html5-main-video,
-#movie_player.ad-interrupting .ytp-chrome-bottom {
+#movie_player.ad-interrupting video.html5-main-video {
     visibility: visible !important;
     opacity: 1 !important;
 }

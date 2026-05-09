@@ -170,12 +170,18 @@ input:focus {
 .input-group input,
 .input-group select {
   flex: 1;
+  min-width: 0;
   margin-bottom: 0;
+}
+
+.input-group button {
+  flex-shrink: 0;
 }
 
 /* ── Select ── */
 select {
   flex: 1;
+  min-width: 0;
   padding: 8px 10px;
   border: 1px solid #1e2736;
   border-radius: 2px;
@@ -185,6 +191,8 @@ select {
   background: #0d1117;
   outline: none;
   cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
   transition: border-color 0.15s;
 }
 

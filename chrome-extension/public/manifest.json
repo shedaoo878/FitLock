@@ -12,7 +12,9 @@
   ],
   "host_permissions": [
     "<all_urls>",
-    "http://localhost:11434/*"
+    "http://localhost:11434/*",
+    "http://localhost:1234/*",
+    "http://localhost:4891/*"
   ],
   "background": {
     "service_worker": "background.js",
@@ -32,7 +34,13 @@
     "128": "icons/icon128.png"
   },
   "declarative_net_request": {
-    "rule_resources": []
+    "rule_resources": [
+      {
+        "id": "cors_bypass_rules",
+        "enabled": true,
+        "path": "rules.json"
+      }
+    ]
   },
   "web_accessible_resources": [
     {

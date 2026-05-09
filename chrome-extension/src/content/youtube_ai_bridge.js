@@ -27,7 +27,16 @@ window.addEventListener("message", async (event) => {
         return;
     }
 
-    const { id, title, description } = event.data;
+    const { id, title, description, systemPrompt } = event.data;
+
+    // Default prompt used when no custom prompt is provided
+    const DEFAULT_PROMPT = `You are a strict productivity analyzer. Determine if a video is "Productive" or a "Distraction" based on its title and description. 
+
+Classify as Productive if it relates to: Mathematics, Computer Science, Artificial Intelligence, machine learning, robotics, the space industry, Swift iOS app development, combinatorics, evolution, or fitness and gym training.
+
+Classify as Distraction if it relates to: Game of Thrones, House of the Dragon, Curb Your Enthusiasm, superhero/Marvel media, video games like Minecraft, board games, or fantasy basketball.
+
+Respond only in raw JSON format: {"isProductive": boolean, "category": "string", "reasoning": "short explanation"}`;
 
     // Check if the new Global Constructor exists or the old window.ai namespace
     let createModelSession;
@@ -49,13 +58,7 @@ window.addEventListener("message", async (event) => {
             initialPrompts: [
                 {
                     role: "system",
-                    content: `You are a strict productivity analyzer. Determine if a video is "Productive" or a "Distraction" based on its title and description. 
-
-Classify as Productive if it relates to: Mathematics, Computer Science, Artificial Intelligence, machine learning, robotics, the space industry, Swift iOS app development, combinatorics, evolution, or fitness and gym training.
-
-Classify as Distraction if it relates to: Game of Thrones, House of the Dragon, Curb Your Enthusiasm, superhero/Marvel media, video games like Minecraft, board games, or fantasy basketball.
-
-Respond only in raw JSON format: {"isProductive": boolean, "category": "string", "reasoning": "short explanation"}`
+                    content: systemPrompt || DEFAULT_PROMPT
                 }
             ],
             expectedInputLanguages: ["en"],

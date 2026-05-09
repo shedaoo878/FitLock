@@ -14,7 +14,61 @@ import {
 const METERS_PER_MILE = 1609.34;
 const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 const RESET_ALARM = "fitlock-daily-reset";
-const OLLAMA_BASE_URL = "http://localhost:11434";
+
+// ── Local AI Server Configurations ──
+const LOCAL_AI_SERVERS = {
+  ollama: {
+    name: "Ollama",
+    baseUrl: "http://localhost:11434",
+    listModelsEndpoint: "/api/tags",
+    parseModels: (data) => (data.models || []).map(m => m.name),
+    chatEndpoint: "/api/chat",
+    buildChatBody: (model, systemPrompt, userPrompt) => ({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      stream: false,
+      options: { temperature: 0 }
+    }),
+    parseResponse: (data) => data.message?.content || "",
+  },
+  lmstudio: {
+    name: "LM Studio",
+    baseUrl: "http://localhost:1234",
+    listModelsEndpoint: "/v1/models",
+    parseModels: (data) => (data.data || []).map(m => m.id),
+    chatEndpoint: "/v1/chat/completions",
+    buildChatBody: (model, systemPrompt, userPrompt) => ({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0,
+      stream: false
+    }),
+    parseResponse: (data) => data.choices?.[0]?.message?.content || "",
+  },
+  gpt4all: {
+    name: "GPT4All",
+    baseUrl: "http://localhost:4891",
+    listModelsEndpoint: "/v1/models",
+    parseModels: (data) => (data.data || []).map(m => m.id),
+    chatEndpoint: "/v1/chat/completions",
+    buildChatBody: (model, systemPrompt, userPrompt) => ({
+      model,
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ],
+      temperature: 0,
+      stream: false
+    }),
+    parseResponse: (data) => data.choices?.[0]?.message?.content || "",
+  }
+};
 
 // ── AI Backend Detection ──
 // Instead of browser sniffing (unreliable — Arc, Brave, etc. report "Google Chrome"),
@@ -29,60 +83,59 @@ async function detectAIBackend() {
   return "ollama";
 }
 
-// ── Ollama Integration ──
-const OLLAMA_SYSTEM_PROMPT = `You are a strict productivity analyzer. Determine if a video is "Productive" or a "Distraction" based PRIMARILY on its title. The description may be stale or missing — if the title clearly indicates the topic, trust the title over the description.
+// ── Local AI Integration ──
+const DEFAULT_YOUTUBE_PROMPT = `You are a productivity analyzer. Your job is to determine whether a YouTube video is "Productive" or a "Distraction" based PRIMARILY on its title. The description may be stale or missing — if the title clearly indicates the topic, trust the title.
 
-Classify as Productive if it relates to: Mathematics, Computer Science, Artificial Intelligence, machine learning, robotics, the space industry, Swift iOS app development, combinatorics, evolution, or fitness and gym training.
+Think about the INTENT and NATURE of the content, not just the topic:
 
-Classify as Distraction if it does NOT clearly relate to any of the above productive categories.
+Classify as PRODUCTIVE if the video is genuinely informational, educational, or intellectually enriching — regardless of specific subject. This includes (but is NOT limited to):
+- Any academic or educational subject: history, economics, science, geography, philosophy, law, politics, literature, linguistics
+- News, current events, world affairs, and journalism
+- Technology, programming, AI, math, engineering, medicine, biology
+- Fitness, nutrition, sports training, and physical wellness
+- How-to guides, tutorials, skill-building, and instructional content
+- Documentaries, explainer videos, lectures, talks, and interviews that inform
+- Finance, investing, personal development, and career growth
+- Culture, art history, or analysis that deepens understanding
+
+Classify as DISTRACTION if the content is primarily for passive entertainment, amusement, or time-killing with little to no informational value. This includes:
+- TV shows, movies, series, anime, cartoons, and animated shows
+- Drama, reality TV, celebrity gossip, and entertainment news
+- Comedy sketches, memes, reaction videos, and viral content
+- Music videos (unless educational about music theory or history)
+- Gaming streams or Let's Plays (unless educational about game design/programming)
+- Fan content, shipping, or fandom-related videos
+- Prank videos, challenge videos, or content designed purely for shock/amusement
+
+When in doubt: ask yourself "Does watching this leave the viewer meaningfully more informed or skilled?" If yes → Productive. If it's purely for entertainment → Distraction.
 
 Respond only in raw JSON format: {"isProductive": boolean, "category": "string", "reasoning": "short explanation"}`;
 
-async function checkOllamaStatus() {
-  try {
-    const res = await fetch(`${OLLAMA_BASE_URL}/api/tags`);
-    if (res.status === 403) {
-      return { available: false, models: [], error: "cors" };
-    }
-    if (!res.ok) return { available: false, models: [] };
-    const data = await res.json();
-    const models = (data.models || []).map(m => m.name);
-    return { available: true, models };
-  } catch {
-    return { available: false, models: [] };
-  }
-}
+async function localAiInference(title, description) {
+  const data = await chrome.storage.local.get(["localAiModel", "localAiServer", "youtubePrompt"]);
+  const model = data.localAiModel;
+  const serverKey = data.localAiServer || "ollama";
+  const server = LOCAL_AI_SERVERS[serverKey];
+  const systemPrompt = data.youtubePrompt || DEFAULT_YOUTUBE_PROMPT;
 
-async function ollamaInference(title, description) {
-  const data = await chrome.storage.local.get(["ollamaModel"]);
-  const model = data.ollamaModel;
-  if (!model) throw new Error("No Ollama model selected. Configure one in FitLock settings.");
+  if (!model) throw new Error("No model selected. Configure one in FitLock settings.");
+  if (!server) throw new Error(`Unknown AI server: ${serverKey}`);
 
   const userPrompt = `Title: ${title}\nDescription: ${description}`;
 
-  // Use /api/chat with proper message roles — models respond much more
-  // reliably to structured chat messages than raw /api/generate prompts.
-  const res = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+  const res = await fetch(`${server.baseUrl}${server.chatEndpoint}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: "system", content: OLLAMA_SYSTEM_PROMPT },
-        { role: "user", content: userPrompt }
-      ],
-      stream: false,
-      options: { temperature: 0 }
-    })
+    body: JSON.stringify(server.buildChatBody(model, systemPrompt, userPrompt))
   });
 
   if (!res.ok) {
     const errText = await res.text().catch(() => "Unknown error");
-    throw new Error(`Ollama inference failed (${res.status}): ${errText}`);
+    throw new Error(`${server.name} inference failed (${res.status}): ${errText}`);
   }
 
   const result = await res.json();
-  return result.message?.content || "";
+  return server.parseResponse(result);
 }
 
 // Your Strava API app's Client ID (public, safe to embed)
@@ -108,7 +161,7 @@ chrome.runtime.onInstalled.addListener(async (details) => {
     if (isChrome) {
       chrome.tabs.create({ url: chrome.runtime.getURL("onboarding.html") });
     } else {
-      chrome.tabs.create({ url: chrome.runtime.getURL("ollama-setup.html") });
+      chrome.tabs.create({ url: chrome.runtime.getURL("local-ai-setup.html") });
     }
   }
 
@@ -162,7 +215,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // ── Blocking Rules ──
 async function applyBlockingRules() {
-  const data = await chrome.storage.local.get(["blockedSites", "unlockedToday", "youtubeSmartLock"]);
+  const data = await chrome.storage.local.get(["blockedSites", "unlockedToday", "youtubeSmartLock"]);  
   const sites = data.blockedSites || [];
   const unlocked = data.unlockedToday || false;
   const smartLock = data.youtubeSmartLock || false;
@@ -235,6 +288,7 @@ async function syncCloudToLocal() {
         await chrome.storage.local.set({
           goalMiles: p.daily_goal_miles || 1,
           resetHour: p.reset_hour || 0,
+          youtubePrompt: p.youtube_prompt || DEFAULT_YOUTUBE_PROMPT,
         });
         scheduleReset();
       }
@@ -581,7 +635,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === "getStatus") {
     chrome.storage.local.get(
-      ["blockedSites", "goalMiles", "unlockedToday", "stravaConnected", "activityCache", "resetHour", "sbUser", "youtubeSmartLock", "ollamaModel"],
+      ["blockedSites", "goalMiles", "unlockedToday", "stravaConnected", "activityCache", "resetHour", "sbUser", "youtubeSmartLock", "localAiModel", "localAiServer"],
       async (data) => {
         const aiBackend = await detectAIBackend();
         sendResponse({
@@ -594,7 +648,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
           googleUser: data.sbUser || null,
           youtubeSmartLock: data.youtubeSmartLock || false,
           aiBackend,
-          ollamaModel: data.ollamaModel || null,
+          localAiModel: data.localAiModel || null,
+          localAiServer: data.localAiServer || "ollama",
         });
       }
     );
@@ -619,24 +674,77 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.action === "checkOllamaStatus") {
-    checkOllamaStatus()
+  if (msg.action === "checkLocalAiStatus") {
+    const serverKey = msg.server || "ollama";
+    checkLocalAiStatus(serverKey)
       .then((result) => sendResponse(result))
       .catch(() => sendResponse({ available: false, models: [] }));
     return true;
   }
 
-  if (msg.action === "selectOllamaModel") {
-    chrome.storage.local.set({ ollamaModel: msg.model }, () => {
+  if (msg.action === "selectLocalAiServer") {
+    chrome.storage.local.set({ localAiServer: msg.server, localAiModel: "" }, () => {
       sendResponse({ success: true });
     });
     return true;
   }
 
-  if (msg.action === "ollamaInference") {
-    ollamaInference(msg.title, msg.description)
+  if (msg.action === "selectLocalAiModel") {
+    chrome.storage.local.set({ localAiModel: msg.model }, () => {
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+
+  if (msg.action === "localAiInference") {
+    localAiInference(msg.title, msg.description)
       .then((rawResponse) => sendResponse({ success: true, rawResponse }))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
+      .catch((err) => {
+        console.error("[FitLock] Local AI inference failed in background:", err.message, err);
+        sendResponse({ success: false, error: err.message });
+      });
+    return true;
+  }
+
+  if (msg.action === "getPrompts") {
+    chrome.storage.local.get(["youtubePrompt"], (data) => {
+      sendResponse({
+        success: true,
+        youtubePrompt: data.youtubePrompt || DEFAULT_YOUTUBE_PROMPT,
+        defaultYoutubePrompt: DEFAULT_YOUTUBE_PROMPT,
+      });
+    });
+    return true;
+  }
+
+  if (msg.action === "setYoutubePrompt") {
+    const newPrompt = msg.prompt;
+    chrome.storage.local.set({ youtubePrompt: newPrompt }, async () => {
+      const data = await chrome.storage.local.get(["sbUser"]);
+      if (data.sbUser && data.sbUser.id) {
+        try {
+          await sbUpsert("profiles", { id: data.sbUser.id, youtube_prompt: newPrompt });
+        } catch (err) {
+          console.warn("Failed to update youtube_prompt in Supabase:", err);
+        }
+      }
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+
+  if (msg.action === "resetYoutubePrompt") {
+    chrome.storage.local.set({ youtubePrompt: DEFAULT_YOUTUBE_PROMPT }, async () => {
+      const data = await chrome.storage.local.get(["sbUser"]);
+      if (data.sbUser && data.sbUser.id) {
+        try {
+          await sbUpsert("profiles", { id: data.sbUser.id, youtube_prompt: null });
+        } catch (err) {
+          console.warn("Failed to reset youtube_prompt in Supabase:", err);
+        }
+      }
+      sendResponse({ success: true });
+    });
     return true;
   }
 

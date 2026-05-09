@@ -158,16 +158,26 @@ export async function sbInvoke(functionName, body = {}) {
     token ? token.substring(0, 15) + "..." : "NULL"
   );
 
-  const { data, error } = await supabase.functions.invoke(functionName, {
-    body,
+  // Use raw fetch instead of SDK — the SDK swallows error response bodies
+  const url = `${SUPABASE_URL}/functions/v1/${functionName}`;
+  const res = await fetch(url, {
+    method: "POST",
     headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${SUPABASE_ANON_KEY}`,
       "x-user-jwt": token,
     },
+    body: JSON.stringify(body),
   });
 
-  if (error) {
-    throw new Error(`Edge function "${functionName}" failed: ${error.message}`);
+  const data = await res.json().catch(() => null);
+
+  if (!res.ok) {
+    console.error(`[FitLock] Edge function "${functionName}" failed (${res.status}):`, data);
+    const detail = data?.error || data?.message || `HTTP ${res.status}`;
+    throw new Error(`Edge function "${functionName}" failed: ${detail}`);
   }
+
   return data;
 }
 

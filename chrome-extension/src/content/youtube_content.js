@@ -12,8 +12,8 @@ let overlayActive = false;
 let analysisGeneration = 0;  // incremented on every new analysis to cancel stale ones
 let pauseEnforcerInterval = null; // interval ID to prevent YouTube from autoplaying
 let aiBackend = "gemini"; // "gemini" or "ollama" — set during init based on AI availability
-let ollamaConfigured = false; // whether an Ollama model has been selected
-let pauseLogCount = 0; // counter to collapse repeated "Video paused" console logs
+let localAiConfigured = false; // whether a local AI model has been selected
+let youtubePrompt = null; // custom YouTube prompt loaded from storage (null = use default in bridge)
 
 // ── Session-scoped verdict cache ────────────────────────────
 // Keeps track of AI verdicts for the current browsing session so that
@@ -44,34 +44,32 @@ function pauseVideo() {
         return;
     }
 
-    // Send message to the Main World bridge to invoke YouTube's API without CSP issues
+    // Use YouTube's own API via the Main World bridge so the player UI stays in sync.
+    // Do NOT call video.pause() directly — that bypasses YouTube's internal state and
+    // causes the controls overlay to freeze/desync.
     window.postMessage({ type: "FITLOCK_PAUSE_VIDEO" }, "*");
-
-    // Fallback to RAW video element
-    const video = document.querySelector("video");
-    if (video) {
-        video.pause();
-        pauseLogCount++;
-        if (pauseLogCount === 1) {
-            console.log("[FitLock] Video paused for analysis.");
-        }
-    }
 }
 
 function playVideo() {
-    // Send message to the Main World bridge to invoke YouTube's API
+    // Use YouTube's own API via the Main World bridge so the player UI stays in sync.
+    // Do NOT call video.play() directly — that bypasses YouTube's internal state and
+    // causes the controls overlay to freeze/desync.
     window.postMessage({ type: "FITLOCK_PLAY_VIDEO" }, "*");
 
-    // Fallback to RAW video element
-    const video = document.querySelector("video");
-    if (video) {
-        video.play();
-        console.log("[FitLock] Video playback resumed (allowed).");
-    }
+    // Nudge YouTube's control-bar auto-hide timer by simulating a brief mouse
+    // interaction on the player.  Without this, the controls can stay visible
+    // and frozen after we resume playback via the API.
+    requestAnimationFrame(() => {
+        const player = document.querySelector("#movie_player");
+        if (player) {
+            player.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+        }
+    });
 }
 
 function startPauseEnforcer() {
     if (pauseEnforcerInterval !== null) return;
+    console.log("[FitLock] Video pause enforcer started.");
     pauseEnforcerInterval = setInterval(() => {
         pauseVideo();
     }, 250); // aggressively enforce pause every 250ms
@@ -81,7 +79,6 @@ function stopPauseEnforcer() {
     if (pauseEnforcerInterval !== null) {
         clearInterval(pauseEnforcerInterval);
         pauseEnforcerInterval = null;
-        pauseLogCount = 0;
     }
 }
 
@@ -162,13 +159,14 @@ function cleanupOverlaysOnly() {
     // Stop enforcing pause but do NOT resume playback
     stopPauseEnforcer();
 
-    // Actively pause and mute to prevent audio leak from the SPA-cached video
+    // Actively pause and mute to prevent audio leak from the SPA-cached video.
+    // Use YouTube's API for pause, but mute via the raw element since YouTube's
+    // API doesn't expose a standalone mute-without-toggle.
+    window.postMessage({ type: "FITLOCK_PAUSE_VIDEO" }, "*");
     const video = document.querySelector("video");
     if (video) {
-        video.pause();
         video.muted = true;
     }
-    window.postMessage({ type: "FITLOCK_PAUSE_VIDEO" }, "*");
 
     // Reset currentVideoId so that clicking the same video again triggers
     // a fresh analysis (which will hit the verdict cache for instant blocking).
@@ -244,9 +242,9 @@ function showOllamaSetupOverlay() {
           <circle cx="12" cy="16" r="0.5" fill="currentColor" />
         </svg>
       </div>
-      <h1>OLLAMA REQUIRED</h1>
-      <p>Set up Ollama in FitLock extension settings to enable Smart Lock.<br>
-         Install Ollama, start it, then select a model in the Config tab.</p>
+      <h1>LOCAL AI REQUIRED</h1>
+      <p>Set up a local AI server in FitLock extension settings to enable Smart Lock.<br>
+         Choose your server (Ollama, LM Studio, or GPT4All), start it, then select a model in the Config tab.</p>
     `;
     }
 
@@ -307,21 +305,27 @@ function scrapeMetadata(logEntry, targetVideoId) {
     // than the <meta name="description"> tag (which often retains the PREVIOUS
     // video's description during YouTube's client-side routing).
     const expanderEl = document.querySelector(
+        "ytd-watch-metadata #description yt-attributed-string, " +
         "ytd-text-inline-expander #content, " +
         "ytd-text-inline-expander .content, " +
-        "#description-inline-expander #plain-snippet-text"
+        "#description-inline-expander #plain-snippet-text, " +
+        "#description-inline-expander yt-attributed-string"
     );
     if (expanderEl) {
         description = expanderEl.textContent.trim().substring(0, 500);
     }
 
-    // Fallback to meta tag only if the DOM element was empty
+    // Fallback to meta tag only if the DOM element was empty and the meta tag is fresh
     if (!description) {
-        const descMeta = document.querySelector("meta[name='description']");
-        if (descMeta) {
-            const raw = descMeta.content || "";
-            if (!raw.startsWith("Enjoy the videos and music you love")) {
-                description = raw;
+        const ogUrlMeta = document.querySelector("meta[property='og:url']");
+        const isMetaFresh = !targetVideoId || (ogUrlMeta && ogUrlMeta.content.includes(targetVideoId));
+        if (isMetaFresh) {
+            const descMeta = document.querySelector("meta[name='description']");
+            if (descMeta) {
+                const raw = descMeta.content || "";
+                if (!raw.startsWith("Enjoy the videos and music you love")) {
+                    description = raw;
+                }
             }
         }
     }
@@ -395,7 +399,8 @@ function runInference(title, description, logEntry) {
             type: "FITLOCK_AI_REQUEST",
             id: requestId,
             title,
-            description
+            description,
+            systemPrompt: youtubePrompt || null
         }, "*");
 
         // Timeout safeguard
@@ -410,20 +415,22 @@ function runInference(title, description, logEntry) {
     });
 }
 
-// ── AI Inference (Via Ollama / Background Script) ──────────────
+// ── AI Inference (Via Local AI Server / Background Script) ──────────────
 
-function runOllamaInference(title, description, logEntry) {
+function runLocalAiInference(title, description, logEntry) {
     return new Promise((resolve) => {
         const inferenceStart = performance.now();
 
         chrome.runtime.sendMessage(
-            { action: "ollamaInference", title, description },
+            { action: "localAiInference", title, description },
             (res) => {
                 logEntry.ai.inferenceDurationMs = Math.round(performance.now() - inferenceStart);
 
                 if (chrome.runtime.lastError || !res || !res.success) {
+                    const errMsg = res?.error || chrome.runtime.lastError?.message || "Ollama inference failed";
+                    console.error("[FitLock] Local AI inference error:", errMsg);
                     logEntry.ai.available = false;
-                    logEntry.ai.error = res?.error || chrome.runtime.lastError?.message || "Ollama inference failed";
+                    logEntry.ai.error = errMsg;
                     resolve(null);
                     return;
                 }
@@ -431,7 +438,7 @@ function runOllamaInference(title, description, logEntry) {
                 logEntry.ai.available = true;
                 logEntry.ai.rawResponse = res.rawResponse;
 
-                console.log("[FitLock] Ollama raw response:", res.rawResponse);
+                console.log("[FitLock] Local AI raw response:", res.rawResponse);
 
                 // Strip markdown code fences if present (e.g. ```json ... ```)
                 let result = res.rawResponse;
@@ -443,7 +450,7 @@ function runOllamaInference(title, description, logEntry) {
                         const parsed = JSON.parse(jsonMatch[0]);
                         logEntry.ai.parsedResponse = parsed;
                         logEntry.ai.parseMethod = "json_match";
-                        console.log("[FitLock] Ollama parsed:", parsed);
+                        console.log("[FitLock] Local AI parsed:", parsed);
                         resolve(parsed.isProductive === true);
                         return;
                     } catch (parseErr) {
@@ -455,15 +462,15 @@ function runOllamaInference(title, description, logEntry) {
                     result.toLowerCase().includes('"isproductive":true');
                 logEntry.ai.parsedResponse = { fallbackMatch: fallback };
                 logEntry.ai.parseMethod = "includes_fallback";
-                console.log("[FitLock] Ollama fallback parse, isProductive:", fallback);
+                console.log("[FitLock] Local AI fallback parse, isProductive:", fallback);
                 resolve(fallback);
             }
         );
 
-        // Timeout safeguard (60s for Ollama since local models can be slower)
+        // Timeout safeguard (60s for local models since they can be slower)
         setTimeout(() => {
             if (logEntry.ai.inferenceDurationMs === null) {
-                logEntry.ai.error = "Ollama inference timed out after 60 seconds.";
+                logEntry.ai.error = "Local AI inference timed out after 60 seconds.";
                 logEntry.ai.inferenceDurationMs = Math.round(performance.now() - inferenceStart);
                 resolve(null);
             }
@@ -562,7 +569,7 @@ async function analyzeCurrentVideo(trigger) {
 
     const isProductive = aiBackend === "gemini"
         ? await runInference(metadata.title, metadata.description, logEntry)
-        : await runOllamaInference(metadata.title, metadata.description, logEntry);
+        : await runLocalAiInference(metadata.title, metadata.description, logEntry);
 
     // Stale check after AI inference
     if (thisGeneration !== analysisGeneration) {
@@ -575,7 +582,7 @@ async function analyzeCurrentVideo(trigger) {
     if (isProductive === null) {
         logEntry.verdict.isProductive = null;
         logEntry.verdict.action = "inconclusive_ai_unavailable";
-        hideOverlayAndAllow(); // Let them watch if no AI to not disrupt
+        blockVideo(); // Fail closed — block until a local AI server is available
     } else {
         logEntry.verdict.isProductive = isProductive;
         logEntry.verdict.action = isProductive ? "allow" : "block";
@@ -607,9 +614,17 @@ function initSmartLock() {
 
         // Set AI backend for the session
         aiBackend = res.aiBackend || "gemini";
-        ollamaConfigured = !!res.ollamaModel;
+        localAiConfigured = !!res.localAiModel;
 
-        console.log(`[FitLock] AI backend: ${aiBackend}, Ollama configured: ${ollamaConfigured}`);
+        // Load custom prompt from storage
+        chrome.storage.local.get(["youtubePrompt"], (promptData) => {
+            if (promptData.youtubePrompt) {
+                youtubePrompt = promptData.youtubePrompt;
+                console.log("[FitLock] Custom YouTube prompt loaded from storage.");
+            }
+        });
+
+        console.log(`[FitLock] AI backend: ${aiBackend}, Local AI configured: ${localAiConfigured}`);
 
         const isActive = !res.unlockedToday &&
             res.blockedSites.includes("youtube.com") &&
@@ -621,9 +636,9 @@ function initSmartLock() {
             return;
         }
 
-        // When using Ollama backend, require a model to be configured
-        if (aiBackend === "ollama" && !ollamaConfigured) {
-            console.log("[FitLock] Non-Chrome browser detected but Ollama not configured. Showing setup overlay.");
+        // When using local AI backend, require a model to be configured
+        if (aiBackend === "ollama" && !localAiConfigured) {
+            console.log("[FitLock] Non-Chrome browser detected but local AI not configured. Showing setup overlay.");
             if (window.location.pathname.startsWith("/watch")) {
                 showOllamaSetupOverlay();
             }
