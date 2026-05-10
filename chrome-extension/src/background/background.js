@@ -138,6 +138,37 @@ async function localAiInference(title, description) {
   return server.parseResponse(result);
 }
 
+async function checkLocalAiStatus(serverKey = "ollama") {
+  const server = LOCAL_AI_SERVERS[serverKey];
+  if (!server) return { available: false, models: [], error: "unknown-server" };
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const res = await fetch(`${server.baseUrl}${server.listModelsEndpoint}`, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      return { available: false, models: [], error: `http-${res.status}` };
+    }
+
+    const data = await res.json();
+    return { available: true, models: server.parseModels(data) };
+  } catch (err) {
+    return {
+      available: false,
+      models: [],
+      error: err?.name === "AbortError" ? "timeout" : "connection",
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 // Your Strava API app's Client ID (public, safe to embed)
 // Find this at: https://www.strava.com/settings/api
 const STRAVA_CLIENT_ID = "203705";
@@ -674,7 +705,7 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     return true;
   }
 
-  if (msg.action === "checkLocalAiStatus") {
+  if (msg.action === "checkLocalAiStatus" || msg.action === "checkOllamaStatus") {
     const serverKey = msg.server || "ollama";
     checkLocalAiStatus(serverKey)
       .then((result) => sendResponse(result))
@@ -691,6 +722,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
 
   if (msg.action === "selectLocalAiModel") {
     chrome.storage.local.set({ localAiModel: msg.model }, () => {
+      sendResponse({ success: true });
+    });
+    return true;
+  }
+
+  if (msg.action === "selectOllamaModel") {
+    chrome.storage.local.set({ localAiServer: "ollama", localAiModel: msg.model }, () => {
       sendResponse({ success: true });
     });
     return true;

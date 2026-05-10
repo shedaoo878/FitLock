@@ -69,7 +69,7 @@
       stravaConnected = res.stravaConnected;
       lastCheck = res.lastCheck;
       aiBackend = res.aiBackend || "gemini";
-      ollamaModel = res.ollamaModel || "";
+      ollamaModel = res.localAiModel || "";
 
       if (!res.googleUser || !res.stravaConnected) {
         activeTab = "account";
@@ -182,8 +182,14 @@
 
   function refreshOllama() {
     ollamaChecking = true;
-    chrome.runtime.sendMessage({ action: "checkOllamaStatus" }, (res) => {
+    chrome.runtime.sendMessage({ action: "checkLocalAiStatus", server: "ollama" }, (res) => {
       ollamaChecking = false;
+      if (chrome.runtime.lastError) {
+        ollamaAvailable = false;
+        ollamaModels = [];
+        ollamaCorsError = false;
+        return;
+      }
       ollamaAvailable = res?.available || false;
       ollamaModels = res?.models || [];
       ollamaCorsError = res?.error === "cors";
@@ -192,7 +198,7 @@
 
   function selectOllamaModel() {
     if (!ollamaModel) return;
-    chrome.runtime.sendMessage({ action: "selectOllamaModel", model: ollamaModel }, () => {
+    chrome.runtime.sendMessage({ action: "selectLocalAiModel", model: ollamaModel }, () => {
       ollamaModelSaved = true;
       setTimeout(() => (ollamaModelSaved = false), 1500);
     });

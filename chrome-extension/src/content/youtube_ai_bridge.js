@@ -5,9 +5,43 @@
 //  which is blocked in the extension's isolated world.
 // ══════════════════════════════════════════════════════════════
 
+// Global lock state
+window.__fitlock_is_locked = false;
+
+// Monkey-patch HTMLVideoElement.prototype.play to intercept playback
+const originalVideoPlay = HTMLVideoElement.prototype.play;
+HTMLVideoElement.prototype.play = function() {
+    if (window.__fitlock_is_locked) {
+        console.log("🔒 [FitLock Bridge] Intercepted a play() attempt because the video is locked!");
+        // Return a resolved promise to prevent Uncaught Promise Rejection errors in YouTube's SPA
+        return Promise.resolve();
+    }
+    return originalVideoPlay.apply(this, arguments);
+};
+
 window.addEventListener("message", async (event) => {
     // Only accept messages from our own extension's content script
     if (event.source !== window || !event.data || !event.data.type) {
+        return;
+    }
+
+    if (event.data.type === "FITLOCK_LOCK_VIDEO") {
+        console.log("🔒 [FitLock Bridge] LOCK signal received. Engaging lock and pausing video elements...");
+        window.__fitlock_is_locked = true;
+        const p = document.querySelector('#movie_player');
+        if (p && typeof p.pauseVideo === 'function') { p.pauseVideo(); }
+        // Also pause any raw video elements just to be safe
+        document.querySelectorAll('video').forEach(v => v.pause());
+        return;
+    }
+
+    if (event.data.type === "FITLOCK_UNLOCK_VIDEO") {
+        console.log(`🔓 [FitLock Bridge] UNLOCK signal received. Disengaging lock. (Will resume play: ${event.data.play !== false})`);
+        window.__fitlock_is_locked = false;
+        if (event.data.play !== false) {
+            const p = document.querySelector('#movie_player');
+            if (p && typeof p.playVideo === 'function') { p.playVideo(); }
+        }
         return;
     }
 
