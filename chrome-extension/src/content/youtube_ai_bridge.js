@@ -12,6 +12,7 @@ window.__fitlock_is_locked = false;
 const originalVideoPlay = HTMLVideoElement.prototype.play;
 HTMLVideoElement.prototype.play = function() {
     if (window.__fitlock_is_locked) {
+        console.log("🔒 [FitLock Bridge] Intercepted a play() attempt because the video is locked!");
         // Return a resolved promise to prevent Uncaught Promise Rejection errors in YouTube's SPA
         return Promise.resolve();
     }
@@ -25,6 +26,7 @@ window.addEventListener("message", async (event) => {
     }
 
     if (event.data.type === "FITLOCK_LOCK_VIDEO") {
+        console.log("🔒 [FitLock Bridge] LOCK signal received. Engaging lock and pausing video elements...");
         window.__fitlock_is_locked = true;
         const p = document.querySelector('#movie_player');
         if (p && typeof p.pauseVideo === 'function') { p.pauseVideo(); }
@@ -34,6 +36,7 @@ window.addEventListener("message", async (event) => {
     }
 
     if (event.data.type === "FITLOCK_UNLOCK_VIDEO") {
+        console.log(`🔓 [FitLock Bridge] UNLOCK signal received. Disengaging lock. (Will resume play: ${event.data.play !== false})`);
         window.__fitlock_is_locked = false;
         if (event.data.play !== false) {
             const p = document.querySelector('#movie_player');

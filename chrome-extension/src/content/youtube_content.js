@@ -39,13 +39,15 @@ function lockVideoPlayback() {
     // If an ad is playing, do not lock it!
     const player = document.querySelector("#movie_player");
     if (player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"))) {
-        console.log("[FitLock] Ad is currently playing, skipping lock.");
+        console.log("⚠️ [FitLock Content] Ad is playing, skipping lock request.");
         return;
     }
+    console.log("🛑 [FitLock Content] Sending LOCK signal to Main World bridge...");
     window.postMessage({ type: "FITLOCK_LOCK_VIDEO" }, "*");
 }
 
 function unlockVideoPlayback(shouldPlay = true) {
+    console.log(`▶️ [FitLock Content] Sending UNLOCK signal to Main World bridge... (shouldPlay=${shouldPlay})`);
     window.postMessage({ type: "FITLOCK_UNLOCK_VIDEO", play: shouldPlay }, "*");
 
     if (shouldPlay) {
