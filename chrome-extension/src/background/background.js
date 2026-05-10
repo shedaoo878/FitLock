@@ -35,8 +35,10 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 
     if (isChrome) {
       chrome.tabs.create({ url: chrome.runtime.getURL("onboarding.html") });
+      chrome.storage.local.set({ preferredAiBackend: "gemini" });
     } else {
       chrome.tabs.create({ url: chrome.runtime.getURL("local-ai-setup.html") });
+      chrome.storage.local.set({ preferredAiBackend: "ollama" });
     }
   }
 

@@ -12,14 +12,21 @@
   let lastCheck = $state(null);
   let siteInput = $state("");
 
-  // Ollama state (non-Chrome browsers)
+  // AI engine state
   let aiBackend = $state("gemini");
+  let preferredAiBackend = $state(null);
+  let geminiAvailable = $state(false);
+  let checkingGemini = $state(false);
+
+  // Local AI state
+  let localAiServer = $state("ollama");
   let ollamaAvailable = $state(false);
   let ollamaModels = $state([]);
   let ollamaModel = $state("");
   let ollamaChecking = $state(false);
   let ollamaModelSaved = $state(false);
   let ollamaCorsError = $state(false);
+  let backendSaved = $state(false);
 
   // Button loading states
   let googleSigningIn = $state(false);
@@ -69,15 +76,19 @@
       stravaConnected = res.stravaConnected;
       lastCheck = res.lastCheck;
       aiBackend = res.aiBackend || "gemini";
+      preferredAiBackend = res.preferredAiBackend || res.aiBackend || "gemini";
+      localAiServer = res.localAiServer || "ollama";
       ollamaModel = res.localAiModel || "";
 
       if (!res.googleUser || !res.stravaConnected) {
         activeTab = "account";
       }
 
-      // Auto-check Ollama status on non-Chrome browsers
-      if (aiBackend === "ollama") {
-        refreshOllama();
+      // Check AI availability based on current preference
+      if (preferredAiBackend === "gemini") {
+        checkGeminiStatus();
+      } else {
+        refreshLocalAi();
       }
     });
   }
@@ -180,9 +191,75 @@
     });
   }
 
-  function refreshOllama() {
+  async function checkGeminiStatus() {
+    checkingGemini = true;
+    geminiAvailable = false;
+
+    try {
+      // Check directly in the popup's own page context (extension pages CAN access these APIs)
+      // Try the new global LanguageModel constructor first
+      if (typeof LanguageModel !== "undefined") {
+        if (typeof LanguageModel.availability === "function") {
+          const avail = await LanguageModel.availability();
+          const state = typeof avail === "string" ? avail : avail?.available || "no";
+          if (state === "readily" || state === "available") { geminiAvailable = true; checkingGemini = false; return; }
+        }
+        if (typeof LanguageModel.capabilities === "function") {
+          const caps = await LanguageModel.capabilities();
+          const state = typeof caps === "string" ? caps : caps?.available || "no";
+          if (state === "readily" || state === "available") { geminiAvailable = true; checkingGemini = false; return; }
+        }
+      }
+
+      // Try self.ai namespace
+      if (typeof self.ai !== "undefined" && self.ai?.languageModel) {
+        if (typeof self.ai.languageModel.capabilities === "function") {
+          const caps = await self.ai.languageModel.capabilities();
+          const state = typeof caps === "string" ? caps : caps?.available || "no";
+          if (state === "readily" || state === "available") { geminiAvailable = true; checkingGemini = false; return; }
+        }
+      }
+
+      // Try window.ai namespace
+      if (typeof window.ai !== "undefined" && window.ai?.languageModel) {
+        if (typeof window.ai.languageModel.capabilities === "function") {
+          const caps = await window.ai.languageModel.capabilities();
+          const state = typeof caps === "string" ? caps : caps?.available || "no";
+          if (state === "readily" || state === "available") { geminiAvailable = true; checkingGemini = false; return; }
+        }
+      }
+    } catch {
+      // Fall through — not available
+    }
+
+    checkingGemini = false;
+  }
+
+  function setPreferredBackend(backend) {
+    preferredAiBackend = backend;
+    chrome.runtime.sendMessage({ action: "setPreferredAiBackend", backend }, () => {
+      backendSaved = true;
+      setTimeout(() => (backendSaved = false), 1500);
+
+      if (backend === "gemini") {
+        checkGeminiStatus();
+      } else {
+        refreshLocalAi();
+      }
+    });
+  }
+
+  function selectLocalAiServer(server) {
+    localAiServer = server;
+    chrome.runtime.sendMessage({ action: "selectLocalAiServer", server }, () => {
+      ollamaModel = "";
+      refreshLocalAi();
+    });
+  }
+
+  function refreshLocalAi() {
     ollamaChecking = true;
-    chrome.runtime.sendMessage({ action: "checkLocalAiStatus", server: "ollama" }, (res) => {
+    chrome.runtime.sendMessage({ action: "checkLocalAiStatus", server: localAiServer }, (res) => {
       ollamaChecking = false;
       if (chrome.runtime.lastError) {
         ollamaAvailable = false;
@@ -365,6 +442,111 @@
   <!-- Settings Tab -->
   {#if activeTab === "settings"}
     <div class="tab-content active" id="tab-settings">
+      <!-- AI Engine Section -->
+      <div class="section-header">
+        <span class="section-label">AI ENGINE</span>
+      </div>
+      <p class="setting-desc">Choose which AI backend Smart Lock uses for YouTube analysis.</p>
+
+      <div class="ai-engine-selector">
+        <button
+          class="engine-option"
+          class:selected={preferredAiBackend === "gemini"}
+          onclick={() => setPreferredBackend("gemini")}
+        >
+          <span class="engine-icon">✦</span>
+          <span class="engine-name">Gemini Nano</span>
+          <span class="engine-tag">BUILT-IN</span>
+        </button>
+        <button
+          class="engine-option"
+          class:selected={preferredAiBackend === "ollama"}
+          onclick={() => setPreferredBackend("ollama")}
+        >
+          <span class="engine-icon">⚙</span>
+          <span class="engine-name">Local AI Server</span>
+          <span class="engine-tag">EXTERNAL</span>
+        </button>
+      </div>
+
+      {#if backendSaved}
+        <p class="setting-desc" style="color: #4ade80; text-align: center;">Preference saved — reload YouTube tabs to apply.</p>
+      {/if}
+
+      <!-- Gemini Nano Status -->
+      {#if preferredAiBackend === "gemini"}
+        <div class="ai-status-box">
+          <div class="connection-status" style="justify-content: flex-start; padding: 8px 0;">
+            <span class="status-dot" class:online={geminiAvailable}></span>
+            <span class="status-label" style={geminiAvailable ? "" : "color: #f87171"}>
+              {checkingGemini ? "CHECKING..." : geminiAvailable ? "AVAILABLE" : "NOT DETECTED"}
+            </span>
+          </div>
+          {#if geminiAvailable}
+            <p class="setting-desc" style="color: #6b7a8d;">Gemini Nano is ready. YouTube videos will be analyzed on-device using Chrome's built-in AI.</p>
+          {:else}
+            <p class="setting-desc" style="color: #fbbf24;">Gemini Nano is not available. Enable Chrome flags and download the model via the onboarding guide, or switch to a Local AI Server.</p>
+          {/if}
+          <button class="full-btn" onclick={checkGeminiStatus} disabled={checkingGemini}>
+            {checkingGemini ? "Checking..." : "RECHECK GEMINI STATUS"}
+          </button>
+        </div>
+      {/if}
+
+      <!-- Local AI Server Config -->
+      {#if preferredAiBackend === "ollama"}
+        <div class="ai-status-box">
+          <label for="local-ai-server-select">Server</label>
+          <div class="input-group">
+            <select id="local-ai-server-select" bind:value={localAiServer} onchange={(e) => selectLocalAiServer(e.target.value)}>
+              <option value="ollama">Ollama</option>
+              <option value="lmstudio">LM Studio</option>
+              <option value="gpt4all">GPT4All</option>
+            </select>
+          </div>
+
+          <div class="connection-status" style="justify-content: flex-start; padding: 8px 0;">
+            <span class="status-dot" class:online={ollamaAvailable}></span>
+            <span class="status-label" style={ollamaAvailable ? "" : "color: #f87171"}>
+              {ollamaChecking ? "CHECKING..." : ollamaAvailable ? "CONNECTED" : "NOT DETECTED"}
+            </span>
+          </div>
+
+          {#if ollamaAvailable && ollamaModels.length > 0}
+            <label for="ollama-model-select">Model</label>
+            <div class="input-group">
+              <select id="ollama-model-select" bind:value={ollamaModel}>
+                <option value="">Select a model...</option>
+                {#each ollamaModels as model}
+                  <option value={model}>{model}</option>
+                {/each}
+              </select>
+              <button id="save-ollama-btn" onclick={selectOllamaModel} disabled={!ollamaModel}>
+                {ollamaModelSaved ? "Saved!" : "SET"}
+              </button>
+            </div>
+          {:else if ollamaAvailable}
+            <p class="setting-desc">Server is running but no models found. Pull or load a model first.</p>
+          {:else if ollamaCorsError}
+            <p class="setting-desc" style="color: #fbbf24;">
+              Server is running but blocking extension requests. Set the OLLAMA_ORIGINS environment variable:
+            </p>
+            <div class="cors-fix-box">
+              <code>OLLAMA_ORIGINS=chrome-extension://* ollama serve</code>
+            </div>
+          {:else}
+            <p class="setting-desc">Install and start your local AI server to enable Smart Lock.</p>
+          {/if}
+
+          <button class="full-btn" onclick={refreshLocalAi} disabled={ollamaChecking}>
+            {ollamaChecking ? "Checking..." : "REFRESH STATUS"}
+          </button>
+        </div>
+      {/if}
+
+      <hr class="divider">
+
+      <!-- Reset Schedule -->
       <div class="section-header">
         <span class="section-label">RESET SCHEDULE</span>
       </div>
@@ -388,55 +570,6 @@
         </select>
         <button id="save-reset-btn" onclick={saveResetHour}>{resetSaved ? "Saved!" : "SET"}</button>
       </div>
-
-      {#if aiBackend === "ollama"}
-        <hr class="divider">
-        <div class="section-header">
-          <span class="section-label">OLLAMA (LOCAL AI)</span>
-        </div>
-        <p class="setting-desc">Smart Lock uses Ollama for AI inference on non-Chrome browsers.</p>
-
-        <div class="connection-status" style="justify-content: flex-start; padding: 8px 0;">
-          <span class="status-dot" class:online={ollamaAvailable}></span>
-          <span class="status-label" style={ollamaAvailable ? "" : "color: #f87171"}>
-            {ollamaChecking ? "CHECKING..." : ollamaAvailable ? "CONNECTED" : "NOT DETECTED"}
-          </span>
-        </div>
-
-        {#if ollamaAvailable && ollamaModels.length > 0}
-          <label for="ollama-model-select">Model</label>
-          <div class="input-group">
-            <select id="ollama-model-select" bind:value={ollamaModel}>
-              <option value="">Select a model...</option>
-              {#each ollamaModels as model}
-                <option value={model}>{model}</option>
-              {/each}
-            </select>
-            <button id="save-ollama-btn" onclick={selectOllamaModel} disabled={!ollamaModel}>
-              {ollamaModelSaved ? "Saved!" : "SET"}
-            </button>
-          </div>
-        {:else if ollamaAvailable}
-          <p class="setting-desc">Ollama is running but no models found. Pull a model first (e.g. ollama pull llama3.2:1b).</p>
-        {:else if ollamaCorsError}
-          <p class="setting-desc" style="color: #fbbf24;">
-            Ollama is running but blocking extension requests. Set the OLLAMA_ORIGINS environment variable and restart Ollama:
-          </p>
-          <div class="cors-fix-box">
-            <code>OLLAMA_ORIGINS=chrome-extension://* ollama serve</code>
-          </div>
-          <p class="setting-desc" style="margin-top: 6px;">
-            Or on macOS, set it globally:<br>
-            <code style="font-size: 10px;">launchctl setenv OLLAMA_ORIGINS "chrome-extension://*"</code>
-          </p>
-        {:else}
-          <p class="setting-desc">Install and start Ollama to enable Smart Lock on this browser.</p>
-        {/if}
-
-        <button class="full-btn" onclick={refreshOllama} disabled={ollamaChecking}>
-          {ollamaChecking ? "Checking..." : "REFRESH OLLAMA STATUS"}
-        </button>
-      {/if}
     </div>
   {/if}
 </div>

@@ -579,17 +579,53 @@ async function analyzeCurrentVideo(trigger) {
     await finalizeLog(logEntry);
 }
 
+// ── Helpers for AI backend detection ─────────────────────────
+
+/** Probe the main-world bridge to check if Gemini Nano is available */
+function probeGeminiNano() {
+    return new Promise((resolve) => {
+        const timeout = setTimeout(() => {
+            window.removeEventListener("message", listener);
+            resolve(false);
+        }, 3000);
+
+        function listener(event) {
+            if (event.source !== window || !event.data || event.data.type !== "FITLOCK_AI_AVAILABLE") return;
+            window.removeEventListener("message", listener);
+            clearTimeout(timeout);
+            resolve(event.data.available === true);
+        }
+
+        window.addEventListener("message", listener);
+        window.postMessage({ type: "FITLOCK_CHECK_AI" }, "*");
+    });
+}
+
+/** Determine the effective AI backend, respecting user preference and probing the bridge */
+async function resolveAiBackend(preferredBackend) {
+    // If the user explicitly chose a backend, trust their choice.
+    // Don't re-probe — Chrome may not have injected the LanguageModel global yet
+    // at document_start timing. The bridge will handle any runtime errors gracefully.
+    if (preferredBackend === "gemini") return "gemini";
+    if (preferredBackend === "ollama") return "ollama";
+
+    // No preference set — auto-detect by probing the main-world bridge
+    const nanoAvailable = await probeGeminiNano();
+    console.log(`[FitLock] Auto-detected Gemini Nano availability: ${nanoAvailable}`);
+    return nanoAvailable ? "gemini" : "ollama";
+}
+
 // ── Initialization ───────────────────────────────────────────
 
 function initSmartLock() {
-    chrome.runtime.sendMessage({ action: "getStatus" }, (res) => {
+    chrome.runtime.sendMessage({ action: "getStatus" }, async (res) => {
         if (chrome.runtime.lastError) {
             console.error("[FitLock] Failed to get status:", chrome.runtime.lastError.message);
             return;
         }
 
-        // Set AI backend for the session
-        aiBackend = res.aiBackend || "gemini";
+        // Resolve the actual AI backend by probing the main-world bridge
+        aiBackend = await resolveAiBackend(res.preferredAiBackend || res.aiBackend);
         localAiConfigured = !!res.localAiModel;
 
         // Load custom prompt from storage
@@ -614,7 +650,7 @@ function initSmartLock() {
 
         // When using local AI backend, require a model to be configured
         if (aiBackend === "ollama" && !localAiConfigured) {
-            console.log("[FitLock] Non-Chrome browser detected but local AI not configured. Showing setup overlay.");
+            console.log("[FitLock] Local AI backend selected but no model configured. Showing setup overlay.");
             if (window.location.pathname.startsWith("/watch")) {
                 showOllamaSetupOverlay();
             }

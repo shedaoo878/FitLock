@@ -156,9 +156,9 @@ async function handleToggleSmartLock(msg, sendResponse) {
 
 async function handleGetStatus(_msg, sendResponse) {
   const data = await chrome.storage.local.get(
-    ["blockedSites", "goalMiles", "unlockedToday", "stravaConnected", "activityCache", "resetHour", "sbUser", "youtubeSmartLock", "localAiModel", "localAiServer"]
+    ["blockedSites", "goalMiles", "unlockedToday", "stravaConnected", "activityCache", "resetHour", "sbUser", "youtubeSmartLock", "localAiModel", "localAiServer", "preferredAiBackend"]
   );
-  const aiBackend = await detectAIBackend();
+  const aiBackend = data.preferredAiBackend || await detectAIBackend();
   sendResponse({
     blockedSites: data.blockedSites || [],
     goalMiles: data.goalMiles || 1,
@@ -169,6 +169,7 @@ async function handleGetStatus(_msg, sendResponse) {
     googleUser: data.sbUser || null,
     youtubeSmartLock: data.youtubeSmartLock || false,
     aiBackend,
+    preferredAiBackend: data.preferredAiBackend || null,
     localAiModel: data.localAiModel || null,
     localAiServer: data.localAiServer || "ollama",
   });
@@ -256,6 +257,13 @@ async function handleResetYoutubePrompt(_msg, sendResponse) {
   sendResponse({ success: true });
 }
 
+function handleSetPreferredAiBackend(msg, sendResponse) {
+  const backend = msg.backend; // "gemini" | "ollama"
+  chrome.storage.local.set({ preferredAiBackend: backend }, () => {
+    sendResponse({ success: true });
+  });
+}
+
 async function handleDisconnectStrava(_msg, sendResponse) {
   const data = await chrome.storage.local.get(["sbUser"]);
   // Delete from DB
@@ -301,6 +309,7 @@ const handlers = {
   setYoutubePrompt: handleSetYoutubePrompt,
   resetYoutubePrompt: handleResetYoutubePrompt,
   disconnectStrava: handleDisconnectStrava,
+  setPreferredAiBackend: handleSetPreferredAiBackend,
 };
 
 // ── Registration ──

@@ -500,3 +500,84 @@ button:hover {
   color: #fbbf24;
   white-space: nowrap;
 }
+
+/* ── AI Engine Selector ── */
+.ai-engine-selector {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.engine-option {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 8px;
+  border: 1px solid #1e2736;
+  border-radius: 4px;
+  background: #0d1117;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.engine-option:hover {
+  border-color: #2d3748;
+  background: #151b26;
+}
+
+.engine-option.selected {
+  border-color: rgba(88, 166, 255, 0.5);
+  background: rgba(88, 166, 255, 0.08);
+  box-shadow: 0 0 12px rgba(88, 166, 255, 0.08);
+}
+
+.engine-icon {
+  font-size: 18px;
+  line-height: 1;
+  color: #4a5568;
+  transition: color 0.2s;
+}
+
+.engine-option.selected .engine-icon {
+  color: #58a6ff;
+}
+
+.engine-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: #6b7a8d;
+  transition: color 0.2s;
+}
+
+.engine-option.selected .engine-name {
+  color: #e8eaed;
+}
+
+.engine-tag {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  color: #2d3748;
+  padding: 1px 6px;
+  border: 1px solid #1e2736;
+  border-radius: 2px;
+  transition: all 0.2s;
+}
+
+.engine-option.selected .engine-tag {
+  color: #58a6ff;
+  border-color: rgba(88, 166, 255, 0.3);
+  background: rgba(88, 166, 255, 0.06);
+}
+
+/* ── AI Status Box ── */
+.ai-status-box {
+  padding: 10px;
+  background: #0d1117;
+  border: 1px solid #1a1f2e;
+  border-radius: 2px;
+  margin-bottom: 12px;
+}

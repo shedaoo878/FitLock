@@ -54,8 +54,12 @@ const LOCAL_AI_SERVERS = {
 };
 
 // ── AI Backend Detection ──
-// Instead of browser sniffing (unreliable — Arc, Brave, etc. report "Google Chrome"),
-// we detect whether the built-in Gemini Nano API is actually available.
+// Best-effort hint from the service worker. NOTE: Chrome's built-in AI APIs
+// (self.ai.languageModel / LanguageModel) are typically NOT available in service
+// workers — they only exist in page/main-world contexts. The content script
+// should probe the main-world bridge (FITLOCK_CHECK_AI) for authoritative
+// detection. This function is kept as a fallback hint and will be overridden
+// by the user's preferredAiBackend setting when set.
 export async function detectAIBackend() {
   try {
     if (typeof self.ai !== "undefined" && self.ai?.languageModel) {
