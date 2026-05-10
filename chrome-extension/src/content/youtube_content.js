@@ -10,7 +10,6 @@
 let currentVideoId = null;
 let overlayActive = false;
 let analysisGeneration = 0;  // incremented on every new analysis to cancel stale ones
-let pauseEnforcerInterval = null; // interval ID to prevent YouTube from autoplaying
 let aiBackend = "gemini"; // "gemini" or "ollama" — set during init based on AI availability
 let localAiConfigured = false; // whether a local AI model has been selected
 let youtubePrompt = null; // custom YouTube prompt loaded from storage (null = use default in bridge)
@@ -36,49 +35,29 @@ function getPlayerContainer() {
 
 // ── Helper: find and pause/play the <video> element ─────────
 
-function pauseVideo() {
-    // If an ad is playing, do not pause it!
+function lockVideoPlayback() {
+    // If an ad is playing, do not lock it!
     const player = document.querySelector("#movie_player");
     if (player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"))) {
-        console.log("[FitLock] Ad is currently playing, skipping pause.");
+        console.log("[FitLock] Ad is currently playing, skipping lock.");
         return;
     }
-
-    // Use YouTube's own API via the Main World bridge so the player UI stays in sync.
-    // Do NOT call video.pause() directly — that bypasses YouTube's internal state and
-    // causes the controls overlay to freeze/desync.
-    window.postMessage({ type: "FITLOCK_PAUSE_VIDEO" }, "*");
+    window.postMessage({ type: "FITLOCK_LOCK_VIDEO" }, "*");
 }
 
-function playVideo() {
-    // Use YouTube's own API via the Main World bridge so the player UI stays in sync.
-    // Do NOT call video.play() directly — that bypasses YouTube's internal state and
-    // causes the controls overlay to freeze/desync.
-    window.postMessage({ type: "FITLOCK_PLAY_VIDEO" }, "*");
+function unlockVideoPlayback(shouldPlay = true) {
+    window.postMessage({ type: "FITLOCK_UNLOCK_VIDEO", play: shouldPlay }, "*");
 
-    // Nudge YouTube's control-bar auto-hide timer by simulating a brief mouse
-    // interaction on the player.  Without this, the controls can stay visible
-    // and frozen after we resume playback via the API.
-    requestAnimationFrame(() => {
-        const player = document.querySelector("#movie_player");
-        if (player) {
-            player.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
-        }
-    });
-}
-
-function startPauseEnforcer() {
-    if (pauseEnforcerInterval !== null) return;
-    console.log("[FitLock] Video pause enforcer started.");
-    pauseEnforcerInterval = setInterval(() => {
-        pauseVideo();
-    }, 250); // aggressively enforce pause every 250ms
-}
-
-function stopPauseEnforcer() {
-    if (pauseEnforcerInterval !== null) {
-        clearInterval(pauseEnforcerInterval);
-        pauseEnforcerInterval = null;
+    if (shouldPlay) {
+        // Nudge YouTube's control-bar auto-hide timer by simulating a brief mouse
+        // interaction on the player. Without this, the controls can stay visible
+        // and frozen after we resume playback via the API.
+        requestAnimationFrame(() => {
+            const player = document.querySelector("#movie_player");
+            if (player) {
+                player.dispatchEvent(new MouseEvent("mousemove", { bubbles: true }));
+            }
+        });
     }
 }
 
@@ -96,9 +75,8 @@ function showScanningOverlay() {
     overlayActive = true;
     document.body.classList.remove("fitlock-productive");
 
-    // Pause video immediately so nothing plays behind the overlay, and enforce it
-    pauseVideo();
-    startPauseEnforcer();
+    // Pause video immediately so nothing plays behind the overlay, and lock it
+    lockVideoPlayback();
 
     // Remove any lingering blocked overlay
     const blocked = document.getElementById("fitlock-blocked-overlay");
@@ -136,11 +114,8 @@ function hideOverlayAndAllow() {
     const blocked = document.getElementById("fitlock-blocked-overlay");
     if (blocked) blocked.remove();
 
-    // Stop enforcing pause
-    stopPauseEnforcer();
-
-    // Resume playback — the model said this video is fine
-    playVideo();
+    // Unlock and resume playback — the model said this video is fine
+    unlockVideoPlayback(true);
 }
 
 function cleanupOverlaysOnly() {
@@ -156,8 +131,8 @@ function cleanupOverlaysOnly() {
     const blocked = document.getElementById("fitlock-blocked-overlay");
     if (blocked) blocked.remove();
 
-    // Stop enforcing pause but do NOT resume playback
-    stopPauseEnforcer();
+    // Unlock but do NOT resume playback
+    unlockVideoPlayback(false);
 
     // Actively pause and mute to prevent audio leak from the SPA-cached video.
     // Use YouTube's API for pause, but mute via the raw element since YouTube's
@@ -183,8 +158,8 @@ function blockVideo() {
     // Don't add the productive class — keep the player hidden
     document.body.classList.remove("fitlock-productive");
 
-    // Ensure video stays paused forever while blocked
-    startPauseEnforcer();
+    // Ensure video stays locked forever while blocked
+    lockVideoPlayback();
 
     // Build in-player blocked overlay
     let blocked = document.getElementById("fitlock-blocked-overlay");
@@ -220,8 +195,7 @@ function showOllamaSetupOverlay() {
     overlayActive = true;
     document.body.classList.remove("fitlock-productive");
 
-    pauseVideo();
-    startPauseEnforcer();
+    lockVideoPlayback();
 
     // Remove any lingering overlays
     const existing = document.getElementById("fitlock-overlay");
