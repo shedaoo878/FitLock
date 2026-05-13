@@ -65,6 +65,30 @@
     return text;
   });
 
+  let todayMiles = $derived(lastCheck ? lastCheck.today?.miles || 0 : 0);
+  let displayedGoalMiles = $derived(lastCheck?.goalMiles || goalMiles);
+
+  let lockStateLabel = $derived.by(() => {
+    if (!googleUser) return "AUTH REQUIRED";
+    if (!stravaConnected) return "STRAVA REQUIRED";
+    if (isUnlocked) return "UNLOCKED";
+    if (blockedSites.length > 0) return "LOCKED";
+    return "STANDBY";
+  });
+
+  let nextAction = $derived.by(() => {
+    if (!googleUser) return "Sign in with Google to initialize account sync.";
+    if (!stravaConnected) return "Connect Strava so FitLock can verify your run.";
+    if (isUnlocked) return "Goal complete. Blocked domains are open until reset.";
+    if (blockedSites.length > 0) return "Complete your run, then query Strava to unlock.";
+    return "Add domains to activate your daily lock protocol.";
+  });
+
+  let aiStatusLabel = $derived.by(() => {
+    if (preferredAiBackend === "gemini") return geminiAvailable ? "GEMINI READY" : "GEMINI CHECK";
+    return ollamaAvailable ? "LOCAL ONLINE" : "LOCAL OFFLINE";
+  });
+
   function loadStatus() {
     chrome.runtime.sendMessage({ action: "getStatus" }, (res) => {
       isUnlocked = res.unlockedToday;
@@ -294,20 +318,70 @@
   <!-- Header -->
   <div class="header">
     <div class="header-title">
-      <span class="logo">FITLOCK</span>
-      <span class="version">v1.0</span>
+      <div>
+        <span class="logo">FITLOCK</span>
+        <span class="version">v1.0</span>
+      </div>
+      <span class="lock-chip" class:unlocked={isUnlocked} class:locked={!isUnlocked}>{lockStateLabel}</span>
     </div>
     {#if statusMessage}
-      <div class={statusClass}>{statusMessage}</div>
+      <div class={statusClass}>
+        <span class="terminal-prefix">STATUS</span>
+        <span>{statusMessage}</span>
+      </div>
     {/if}
+    <div class="dashboard-card">
+      <div class="command-line">
+        <span class="prompt">&gt;</span>
+        <span>{nextAction}</span>
+      </div>
+      <div class="metric-grid">
+        <div class="metric-card">
+          <span class="metric-label">RUN</span>
+          <span class="metric-value">{todayMiles.toFixed(2)}</span>
+          <span class="metric-unit">/ {displayedGoalMiles} MI</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">LOCKLIST</span>
+          <span class="metric-value">{blockedSites.length}</span>
+          <span class="metric-unit">{blockedSites.length === 1 ? "DOMAIN" : "DOMAINS"}</span>
+        </div>
+        <div class="metric-card">
+          <span class="metric-label">AI</span>
+          <span class="metric-value small">{preferredAiBackend === "gemini" ? "GEMINI" : "LOCAL"}</span>
+          <span class="metric-unit">{aiStatusLabel}</span>
+        </div>
+      </div>
+      <div id="progress-section">
+        <div class="data-row">
+          <span class="data-label">DAILY PROGRESS</span>
+          <span id="progress-text" class="data-value">{lastCheck ? progressText : "Awaiting Strava query"}</span>
+        </div>
+        <div class="progress-bar">
+          <div id="progress-fill" class="progress-fill" style="width: {progressPct}%"></div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Tab Navigation -->
   <div class="tabs">
-    <button class="tab" class:active={activeTab === "sites"} onclick={() => (activeTab = "sites")}>BLOCKED</button>
-    <button class="tab" class:active={activeTab === "goal"} onclick={() => (activeTab = "goal")}>GOAL</button>
-    <button class="tab" class:active={activeTab === "account"} onclick={() => (activeTab = "account")}>ACCOUNT</button>
-    <button class="tab" class:active={activeTab === "settings"} onclick={() => (activeTab = "settings")}>CONFIG</button>
+    <button class="tab" class:active={activeTab === "sites"} onclick={() => (activeTab = "sites")}>
+      <span class="tab-index">01</span>
+      <span>BLOCKED</span>
+    </button>
+    <button class="tab" class:active={activeTab === "goal"} onclick={() => (activeTab = "goal")}>
+      <span class="tab-index">02</span>
+      <span>GOAL</span>
+    </button>
+    <button class="tab" class:active={activeTab === "account"} onclick={() => (activeTab = "account")}>
+      <span class="tab-index">03</span>
+      <span>ACCOUNT</span>
+    </button>
+    <button class="tab" class:active={activeTab === "settings"} onclick={() => (activeTab = "settings")}>
+      <span class="tab-index">04</span>
+      <span>CONFIG</span>
+    </button>
   </div>
 
   <!-- Sites Tab -->
@@ -315,35 +389,43 @@
     <div class="tab-content active" id="tab-sites">
       <div class="section-header">
         <span class="section-label">DOMAIN BLOCKLIST</span>
+        <span class="section-meta">{blockedSites.length} ACTIVE</span>
       </div>
-      <div class="input-group">
-        <input type="text" bind:value={siteInput} placeholder="enter domain" spellcheck="false" onkeydown={handleSiteKeydown}>
-        <button id="add-site-btn" onclick={addSite}>+ ADD</button>
+      <div class="terminal-panel">
+        <div class="input-group">
+          <input type="text" bind:value={siteInput} placeholder="enter domain" spellcheck="false" onkeydown={handleSiteKeydown}>
+          <button id="add-site-btn" class="primary-btn" onclick={addSite}>+ ADD</button>
+        </div>
+        {#if blockedSites.length === 0}
+          <div class="empty-state">
+            <span class="empty-code">NO_TARGETS</span>
+            <p class="muted">No domains registered. Add a site to activate lock rules.</p>
+          </div>
+        {:else}
+          <ul id="blocked-list">
+            {#each blockedSites as domain}
+              <li>
+                <span class="domain">{domain}</span>
+                <div class="row-actions">
+                  {#if domain === "youtube.com"}
+                    <label class="smart-toggle">
+                      <input
+                        type="checkbox"
+                        checked={youtubeSmartLock}
+                        onchange={(e) => toggleSmartLock(e.target.checked)}
+                      >
+                      Smart Lock
+                    </label>
+                  {/if}
+                  {#if isUnlocked}
+                    <button class="remove-btn" onclick={() => removeSite(domain)}>Remove</button>
+                  {/if}
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
       </div>
-      {#if blockedSites.length === 0}
-        <p class="muted">No domains registered.</p>
-      {:else}
-        <ul id="blocked-list">
-          {#each blockedSites as domain}
-            <li>
-              <span class="domain">{domain}</span>
-              {#if domain === "youtube.com"}
-                <label class="smart-toggle">
-                  <input
-                    type="checkbox"
-                    checked={youtubeSmartLock}
-                    onchange={(e) => toggleSmartLock(e.target.checked)}
-                  >
-                  Smart Lock
-                </label>
-              {/if}
-              {#if isUnlocked}
-                <button class="remove-btn" onclick={() => removeSite(domain)}>Remove</button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
     </div>
   {/if}
 
@@ -352,26 +434,31 @@
     <div class="tab-content active" id="tab-goal">
       <div class="section-header">
         <span class="section-label">DAILY OBJECTIVE</span>
+        <span class="section-meta">{Math.round(progressPct)}% COMPLETE</span>
       </div>
-      <label for="goal-input">Distance requirement (mi)</label>
-      <div class="input-group">
-        <input type="number" id="goal-input" bind:value={goalMiles} min="0.1" step="0.1">
-        <button id="save-goal-btn" onclick={setGoal}>{goalSaved ? "SAVED!" : "SET"}</button>
-      </div>
-      {#if lastCheck}
-        <div id="progress-section">
-          <div class="data-row">
-            <span class="data-label">PROGRESS</span>
-            <span id="progress-text" class="data-value">{progressText}</span>
+      <div class="terminal-panel">
+        <div class="goal-hero">
+          <div>
+            <span class="metric-label">TODAY</span>
+            <div class="goal-number">{todayMiles.toFixed(2)}<span> MI</span></div>
           </div>
-          <div class="progress-bar">
-            <div id="progress-fill" class="progress-fill" style="width: {progressPct}%"></div>
+          <div class="goal-target">
+            <span class="metric-label">TARGET</span>
+            <strong>{displayedGoalMiles} MI</strong>
           </div>
         </div>
-      {/if}
-      <button id="check-goal-btn" class="full-btn" onclick={checkGoal} disabled={checkingGoal}>
-        {checkingGoal ? "Checking..." : "QUERY STRAVA"}
-      </button>
+        <div class="progress-bar large">
+          <div id="progress-fill" class="progress-fill" style="width: {progressPct}%"></div>
+        </div>
+        <label for="goal-input">Distance requirement (mi)</label>
+        <div class="input-group">
+          <input type="number" id="goal-input" bind:value={goalMiles} min="0.1" step="0.1">
+          <button id="save-goal-btn" class="primary-btn" onclick={setGoal}>{goalSaved ? "SAVED!" : "SET"}</button>
+        </div>
+        <button id="check-goal-btn" class="full-btn primary-btn" onclick={checkGoal} disabled={checkingGoal}>
+          {checkingGoal ? "Checking..." : "QUERY STRAVA"}
+        </button>
+      </div>
     </div>
   {/if}
 
@@ -380,42 +467,46 @@
     <div class="tab-content active" id="tab-account">
       {#if !googleUser}
         <!-- Google Sign In -->
-        <div id="google-disconnected">
-          <div class="section-header">
+        <div id="google-disconnected" class="terminal-panel">
+          <div class="section-header compact">
             <span class="section-label">FITLOCK ACCOUNT</span>
+            <span class="section-meta warning">OFFLINE</span>
           </div>
           <p class="setting-desc">Sign in with Google to sync your settings and connect Strava.</p>
-          <button id="connect-google-btn" class="full-btn" onclick={connectGoogle} disabled={googleSigningIn}>
+          <button id="connect-google-btn" class="full-btn primary-btn" onclick={connectGoogle} disabled={googleSigningIn}>
             {googleSigningIn ? "SIGNING IN..." : "SIGN IN WITH GOOGLE"}
           </button>
         </div>
       {:else}
         <!-- Google Connected -->
-        <div id="google-connected">
-          <div class="section-header">
-            <span class="section-label">FITLOCK ACCOUNT</span>
+        <div id="google-connected" class="account-stack">
+          <div class="terminal-panel">
+            <div class="section-header compact">
+              <span class="section-label">FITLOCK ACCOUNT</span>
+              <span class="section-meta positive">ONLINE</span>
+            </div>
+            <div class="connection-status">
+              <span class="status-dot online"></span>
+              <span id="google-email-label" class="status-label">{googleUser.email || "SIGNED IN"}</span>
+            </div>
+            <button
+              id="disconnect-google-btn"
+              class="full-btn danger-btn"
+              onclick={disconnectGoogle}
+              disabled={googleSigningOut}
+            >
+              {googleSigningOut ? "SIGNING OUT..." : "SIGN OUT"}
+            </button>
           </div>
-          <div class="connection-status">
-            <span class="status-dot online"></span>
-            <span id="google-email-label" class="status-label">{googleUser.email || "SIGNED IN"}</span>
-          </div>
-          <button
-            id="disconnect-google-btn"
-            class="full-btn danger-btn"
-            style="margin-bottom: 20px;"
-            onclick={disconnectGoogle}
-            disabled={googleSigningOut}
-          >
-            {googleSigningOut ? "SIGNING OUT..." : "SIGN OUT"}
-          </button>
 
           <hr class="divider">
 
           <!-- Strava Section -->
           {#if !stravaConnected}
-            <div id="strava-disconnected">
-              <div class="section-header">
+            <div id="strava-disconnected" class="terminal-panel">
+              <div class="section-header compact">
                 <span class="section-label">STRAVA CONNECTION</span>
+                <span class="section-meta warning">REQUIRED</span>
               </div>
               <p class="setting-desc">Link your Strava account to track running goals.</p>
               <button id="connect-strava-btn" class="full-btn strava-btn" onclick={connectStrava} disabled={stravaConnecting}>
@@ -423,9 +514,10 @@
               </button>
             </div>
           {:else}
-            <div id="strava-connected">
-              <div class="section-header">
+            <div id="strava-connected" class="terminal-panel">
+              <div class="section-header compact">
                 <span class="section-label">STRAVA CONNECTION</span>
+                <span class="section-meta positive">SYNC READY</span>
               </div>
               <div class="connection-status">
                 <span class="status-dot online"></span>
@@ -445,130 +537,136 @@
       <!-- AI Engine Section -->
       <div class="section-header">
         <span class="section-label">AI ENGINE</span>
+        <span class="section-meta">{aiStatusLabel}</span>
       </div>
-      <p class="setting-desc">Choose which AI backend Smart Lock uses for YouTube analysis.</p>
+      <div class="terminal-panel">
+        <p class="setting-desc">Choose which AI backend Smart Lock uses for YouTube analysis.</p>
 
-      <div class="ai-engine-selector">
-        <button
-          class="engine-option"
-          class:selected={preferredAiBackend === "gemini"}
-          onclick={() => setPreferredBackend("gemini")}
-        >
-          <span class="engine-icon">✦</span>
-          <span class="engine-name">Gemini Nano</span>
-          <span class="engine-tag">BUILT-IN</span>
-        </button>
-        <button
-          class="engine-option"
-          class:selected={preferredAiBackend === "ollama"}
-          onclick={() => setPreferredBackend("ollama")}
-        >
-          <span class="engine-icon">⚙</span>
-          <span class="engine-name">Local AI Server</span>
-          <span class="engine-tag">EXTERNAL</span>
-        </button>
-      </div>
-
-      {#if backendSaved}
-        <p class="setting-desc" style="color: #4ade80; text-align: center;">Preference saved — reload YouTube tabs to apply.</p>
-      {/if}
-
-      <!-- Gemini Nano Status -->
-      {#if preferredAiBackend === "gemini"}
-        <div class="ai-status-box">
-          <div class="connection-status" style="justify-content: flex-start; padding: 8px 0;">
-            <span class="status-dot" class:online={geminiAvailable}></span>
-            <span class="status-label" style={geminiAvailable ? "" : "color: #f87171"}>
-              {checkingGemini ? "CHECKING..." : geminiAvailable ? "AVAILABLE" : "NOT DETECTED"}
-            </span>
-          </div>
-          {#if geminiAvailable}
-            <p class="setting-desc" style="color: #6b7a8d;">Gemini Nano is ready. YouTube videos will be analyzed on-device using Chrome's built-in AI.</p>
-          {:else}
-            <p class="setting-desc" style="color: #fbbf24;">Gemini Nano is not available. Enable Chrome flags and download the model via the onboarding guide, or switch to a Local AI Server.</p>
-          {/if}
-          <button class="full-btn" onclick={checkGeminiStatus} disabled={checkingGemini}>
-            {checkingGemini ? "Checking..." : "RECHECK GEMINI STATUS"}
+        <div class="ai-engine-selector">
+          <button
+            class="engine-option"
+            class:selected={preferredAiBackend === "gemini"}
+            onclick={() => setPreferredBackend("gemini")}
+          >
+            <span class="engine-icon">✦</span>
+            <span class="engine-name">Gemini Nano</span>
+            <span class="engine-tag">BUILT-IN</span>
+          </button>
+          <button
+            class="engine-option"
+            class:selected={preferredAiBackend === "ollama"}
+            onclick={() => setPreferredBackend("ollama")}
+          >
+            <span class="engine-icon">⚙</span>
+            <span class="engine-name">Local AI Server</span>
+            <span class="engine-tag">EXTERNAL</span>
           </button>
         </div>
-      {/if}
 
-      <!-- Local AI Server Config -->
-      {#if preferredAiBackend === "ollama"}
-        <div class="ai-status-box">
-          <label for="local-ai-server-select">Server</label>
-          <div class="input-group">
-            <select id="local-ai-server-select" bind:value={localAiServer} onchange={(e) => selectLocalAiServer(e.target.value)}>
-              <option value="ollama">Ollama</option>
-              <option value="lmstudio">LM Studio</option>
-              <option value="gpt4all">GPT4All</option>
-            </select>
+        {#if backendSaved}
+          <p class="setting-desc success-message">Preference saved — reload YouTube tabs to apply.</p>
+        {/if}
+
+        <!-- Gemini Nano Status -->
+        {#if preferredAiBackend === "gemini"}
+          <div class="ai-status-box">
+            <div class="connection-status inline">
+              <span class="status-dot" class:online={geminiAvailable}></span>
+              <span class="status-label" class:offline={!geminiAvailable}>
+                {checkingGemini ? "CHECKING..." : geminiAvailable ? "AVAILABLE" : "NOT DETECTED"}
+              </span>
+            </div>
+            {#if geminiAvailable}
+              <p class="setting-desc subtle">Gemini Nano is ready. YouTube videos will be analyzed on-device using Chrome's built-in AI.</p>
+            {:else}
+              <p class="setting-desc warning-text">Gemini Nano is not available. Enable Chrome flags and download the model via the onboarding guide, or switch to a Local AI Server.</p>
+            {/if}
+            <button class="full-btn primary-btn" onclick={checkGeminiStatus} disabled={checkingGemini}>
+              {checkingGemini ? "Checking..." : "RECHECK GEMINI STATUS"}
+            </button>
           </div>
+        {/if}
 
-          <div class="connection-status" style="justify-content: flex-start; padding: 8px 0;">
-            <span class="status-dot" class:online={ollamaAvailable}></span>
-            <span class="status-label" style={ollamaAvailable ? "" : "color: #f87171"}>
-              {ollamaChecking ? "CHECKING..." : ollamaAvailable ? "CONNECTED" : "NOT DETECTED"}
-            </span>
-          </div>
-
-          {#if ollamaAvailable && ollamaModels.length > 0}
-            <label for="ollama-model-select">Model</label>
+        <!-- Local AI Server Config -->
+        {#if preferredAiBackend === "ollama"}
+          <div class="ai-status-box">
+            <label for="local-ai-server-select">Server</label>
             <div class="input-group">
-              <select id="ollama-model-select" bind:value={ollamaModel}>
-                <option value="">Select a model...</option>
-                {#each ollamaModels as model}
-                  <option value={model}>{model}</option>
-                {/each}
+              <select id="local-ai-server-select" bind:value={localAiServer} onchange={(e) => selectLocalAiServer(e.target.value)}>
+                <option value="ollama">Ollama</option>
+                <option value="lmstudio">LM Studio</option>
+                <option value="gpt4all">GPT4All</option>
               </select>
-              <button id="save-ollama-btn" onclick={selectOllamaModel} disabled={!ollamaModel}>
-                {ollamaModelSaved ? "Saved!" : "SET"}
-              </button>
             </div>
-          {:else if ollamaAvailable}
-            <p class="setting-desc">Server is running but no models found. Pull or load a model first.</p>
-          {:else if ollamaCorsError}
-            <p class="setting-desc" style="color: #fbbf24;">
-              Server is running but blocking extension requests. Set the OLLAMA_ORIGINS environment variable:
-            </p>
-            <div class="cors-fix-box">
-              <code>OLLAMA_ORIGINS=chrome-extension://* ollama serve</code>
-            </div>
-          {:else}
-            <p class="setting-desc">Install and start your local AI server to enable Smart Lock.</p>
-          {/if}
 
-          <button class="full-btn" onclick={refreshLocalAi} disabled={ollamaChecking}>
-            {ollamaChecking ? "Checking..." : "REFRESH STATUS"}
-          </button>
-        </div>
-      {/if}
+            <div class="connection-status inline">
+              <span class="status-dot" class:online={ollamaAvailable}></span>
+              <span class="status-label" class:offline={!ollamaAvailable}>
+                {ollamaChecking ? "CHECKING..." : ollamaAvailable ? "CONNECTED" : "NOT DETECTED"}
+              </span>
+            </div>
+
+            {#if ollamaAvailable && ollamaModels.length > 0}
+              <label for="ollama-model-select">Model</label>
+              <div class="input-group">
+                <select id="ollama-model-select" bind:value={ollamaModel}>
+                  <option value="">Select a model...</option>
+                  {#each ollamaModels as model}
+                    <option value={model}>{model}</option>
+                  {/each}
+                </select>
+                <button id="save-ollama-btn" class="primary-btn" onclick={selectOllamaModel} disabled={!ollamaModel}>
+                  {ollamaModelSaved ? "Saved!" : "SET"}
+                </button>
+              </div>
+            {:else if ollamaAvailable}
+              <p class="setting-desc">Server is running but no models found. Pull or load a model first.</p>
+            {:else if ollamaCorsError}
+              <p class="setting-desc warning-text">
+                Server is running but blocking extension requests. Set the OLLAMA_ORIGINS environment variable:
+              </p>
+              <div class="cors-fix-box">
+                <code>OLLAMA_ORIGINS=chrome-extension://* ollama serve</code>
+              </div>
+            {:else}
+              <p class="setting-desc">Install and start your local AI server to enable Smart Lock.</p>
+            {/if}
+
+            <button class="full-btn primary-btn" onclick={refreshLocalAi} disabled={ollamaChecking}>
+              {ollamaChecking ? "Checking..." : "REFRESH STATUS"}
+            </button>
+          </div>
+        {/if}
+      </div>
 
       <hr class="divider">
 
       <!-- Reset Schedule -->
-      <div class="section-header">
-        <span class="section-label">RESET SCHEDULE</span>
-      </div>
-      <label for="reset-hour-input">Daily lock reset</label>
-      <p class="setting-desc">Blocking rules re-engage at this hour.</p>
-      <div class="input-group">
-        <select id="reset-hour-input" bind:value={resetHour}>
-          <option value={0}>00:00 — Midnight</option>
-          <option value={1}>01:00</option>
-          <option value={2}>02:00</option>
-          <option value={3}>03:00</option>
-          <option value={4}>04:00</option>
-          <option value={5}>05:00</option>
-          <option value={6}>06:00</option>
-          <option value={7}>07:00</option>
-          <option value={8}>08:00</option>
-          <option value={9}>09:00</option>
-          <option value={10}>10:00</option>
-          <option value={11}>11:00</option>
-          <option value={12}>12:00 — Noon</option>
-        </select>
-        <button id="save-reset-btn" onclick={saveResetHour}>{resetSaved ? "Saved!" : "SET"}</button>
+      <div class="terminal-panel">
+        <div class="section-header compact">
+          <span class="section-label">RESET SCHEDULE</span>
+          <span class="section-meta">{resetHour}:00</span>
+        </div>
+        <label for="reset-hour-input">Daily lock reset</label>
+        <p class="setting-desc">Blocking rules re-engage at this hour.</p>
+        <div class="input-group">
+          <select id="reset-hour-input" bind:value={resetHour}>
+            <option value={0}>00:00 — Midnight</option>
+            <option value={1}>01:00</option>
+            <option value={2}>02:00</option>
+            <option value={3}>03:00</option>
+            <option value={4}>04:00</option>
+            <option value={5}>05:00</option>
+            <option value={6}>06:00</option>
+            <option value={7}>07:00</option>
+            <option value={8}>08:00</option>
+            <option value={9}>09:00</option>
+            <option value={10}>10:00</option>
+            <option value={11}>11:00</option>
+            <option value={12}>12:00 — Noon</option>
+          </select>
+          <button id="save-reset-btn" class="primary-btn" onclick={saveResetHour}>{resetSaved ? "Saved!" : "SET"}</button>
+        </div>
       </div>
     </div>
   {/if}
